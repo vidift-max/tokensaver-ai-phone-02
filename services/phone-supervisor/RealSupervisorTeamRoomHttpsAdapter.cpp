@@ -318,6 +318,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::request(
     const std::wstring& path,
     const std::string& body,
     std::string& response,
+    const std::string* endpointCredential,
     DWORD& status,
     std::wstring& reason) const {
     response.clear();
@@ -421,6 +422,16 @@ bool RealSupervisorTeamRoomHttpsAdapter::request(
         std::wstring bearer = L"Authorization: Bearer " + std::wstring(teamRoomToken_.begin(), teamRoomToken_.end());
         if (!WinHttpAddRequestHeaders(request.get(), bearer.c_str(), static_cast<DWORD>(-1L), WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
             reason = Error(L"AUTHORIZATION_HEADER", GetLastError());
+            return false;
+        }
+    }
+    if (endpointCredential && !endpointCredential->empty()) {
+        std::wstring credential(endpointCredential->begin(), endpointCredential->end());
+        if (!WinHttpAddRequestHeaders(request.get(),
+            (L"X-AI-Phone-Endpoint-Credential: " + credential).c_str(),
+            static_cast<DWORD>(-1L),
+            WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
+            reason = Error(L"ENDPOINT_CREDENTIAL_HEADER", GetLastError());
             return false;
         }
     }
@@ -632,20 +643,6 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
 
     // The endpoint credential is required by the phone API and is never sent to
     // the Team Room auth exchange. It is retained only in this Supervisor process.
-    std::string oldToken = teamRoomToken_;
-    const std::string savedCredential = binding.endpoint_credential;
-    std::string attachResponse;
-    // request() adds only the Team Room bearer. Add the endpoint credential through
-    // a dedicated temporary WinHTTP request by reusing the same pinned transport.
-    // The endpoint credential is not copied into TeamRoomAttachment.
-    //
-    // The current adapter contract does not expose a second header channel, so the
-    // credential must be bound to the attachment operation below.
-    if (!oldToken.empty()) {
-        // Keep the session bearer unchanged; attach is performed by endpoint-specific
-        // helper in the next revision of the adapter.
-    }
-
     std::string joined;
     if (!request(
             L"POST", L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/join",
