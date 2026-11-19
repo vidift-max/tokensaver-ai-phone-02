@@ -188,6 +188,10 @@ void RealSupervisorTeamRoomHttpsAdapter::Clear() {
         SecureZeroMemory(teamRoomToken_.data(), teamRoomToken_.size());
     }
     teamRoomToken_.clear();
+    if (!endpointCredential_.empty()) {
+        SecureZeroMemory(endpointCredential_.data(), endpointCredential_.size());
+    }
+    endpointCredential_.clear();
     roomId_.clear();
     endpoint_.clear();
     attachment_ = {};
@@ -646,7 +650,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     std::string joined;
     if (!request(
             L"POST", L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/join",
-            "", joined, status, reason) ||
+            "", joined, nullptr, status, reason) ||
         status != 200) {
         return false;
     }
@@ -665,6 +669,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     attachment_.endpoint_fence = binding.install_generation;
     attachment_.team_room_session_id = session;
     attachment_.execution_id = execution;
+    endpointCredential_ = binding.endpoint_credential;
     out = attachment_;
     return true;
 }
@@ -679,7 +684,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
     std::string response;
     DWORD status = 0;
     std::wstring reason;
-    if (!request(L"POST", L"/team-room/heartbeat", "", response, status, reason) ||
+    if (!request(L"POST", L"/team-room/heartbeat", "", response, &endpointCredential_, status, reason) ||
         status != 200) {
         return false;
     }
