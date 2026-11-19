@@ -23,7 +23,7 @@ export class PhoneRuntimeClient {
     this.roomId = env.TEAM_ROOM_ROOM_ID || "";
     this.endpointCredential = env.AI_PHONE_ENDPOINT_CREDENTIAL || "";
     this.phoneId = env.AI_PHONE_ID || "";
-    this.endpointId = env.PHONE02_ENDPOINT_ID || "";
+    this.endpointId = env.AI_PHONE_ENDPOINT_ID || env.PHONE02_ENDPOINT_ID || "";
     this.fetch = fetchImpl;
     if (!this.baseUrl || !this.endpointCredential || !this.phoneId || !this.endpointId || (!this.sessionToken && (!this.oidcIssuer || !this.oidcClientId || !this.oidcClientSecret || !this.roomId))) {
       throw new PhoneRuntimeError(
