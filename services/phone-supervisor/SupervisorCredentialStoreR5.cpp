@@ -93,7 +93,7 @@ void SecureBuffer::Clear() noexcept {
     locked_=false;
 }
 SupervisorCredentialStore::SupervisorCredentialStore(std::wstring root,std::wstring serviceSid)
-    :root_(std::move(root)),filePath_(root_+L"\\oidc-client-secret.dpapi"),serviceSid_(std::move(serviceSid)){}
+    :root_(std::move(root)),filePath_(root_+L"\\oidc-client-secret.dpapi"),endpointCredentialPath_(root_+L"\\endpoint-credential.dpapi"),serviceSid_(std::move(serviceSid)){}
 bool SupervisorCredentialStore::ApplyProtectedDacl(const std::wstring& path,bool directory,std::wstring& reason) const {
     if(serviceSid_.rfind(L"S-1-5-80-",0)!=0){reason=L"SERVICE_SID_INVALID";return false;}
     std::wstring sddl=L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;";
@@ -153,6 +153,21 @@ bool SupervisorCredentialStore::WriteClientSecret(const SecureBuffer& secret,std
     if(!ApplyProtectedDacl(filePath_,false,reason))return false;
     return VerifyProtectedDacl(filePath_,reason);
 }
+bool SupervisorCredentialStore::WriteEndpointCredential(const SecureBuffer& credential,std::wstring& reason) {
+    if(credential.empty() || credential.size()<32 || credential.size()>kMaxSecretBytes){reason=L"ENDPOINT_CREDENTIAL_FORMAT_INVALID";return false;}
+    if(!Initialize(reason))return false;
+    std::vector<BYTE> blob;if(!Protect(serviceSid_,credential.data(),credential.size(),blob,reason))return false;
+    const std::wstring temp=endpointCredentialPath_+L".tmp";
+    HANDLE file=CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_HIDDEN|FILE_FLAG_WRITE_THROUGH,nullptr);
+    if(file==INVALID_HANDLE_VALUE){SecureZeroMemory(blob.data(),blob.size());reason=L"ENDPOINT_STORE_TEMP_CREATE_FAILED";return false;}
+    DWORD written=0;bool ok=WriteFile(file,blob.data(),static_cast<DWORD>(blob.size()),&written,nullptr)&&written==static_cast<DWORD>(blob.size())&&FlushFileBuffers(file);
+    CloseHandle(file);SecureZeroMemory(blob.data(),blob.size());blob.clear();
+    if(!ok){DeleteFileW(temp.c_str());reason=L"ENDPOINT_STORE_CIPHERTEXT_WRITE_FAILED";return false;}
+    if(!ApplyProtectedDacl(temp,false,reason)){DeleteFileW(temp.c_str());return false;}
+    if(!MoveFileExW(temp.c_str(),endpointCredentialPath_.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){DeleteFileW(temp.c_str());reason=L"ENDPOINT_STORE_ATOMIC_REPLACE_FAILED";return false;}
+    return VerifyProtectedDacl(endpointCredentialPath_,reason);
+}
+
 bool SupervisorCredentialStore::ReadClientSecret(SecureBuffer& secret,std::wstring& reason) const {
     if(!VerifyProtectedDacl(root_,reason)||!VerifyProtectedDacl(filePath_,reason))return false;
     HANDLE file=CreateFileW(filePath_.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
@@ -162,9 +177,25 @@ bool SupervisorCredentialStore::ReadClientSecret(SecureBuffer& secret,std::wstri
     if(!ok){SecureZeroMemory(blob.data(),blob.size());reason=L"STORE_BLOB_READ_FAILED";return false;}
     bool result=Unprotect(blob.data(),blob.size(),secret,reason);SecureZeroMemory(blob.data(),blob.size());return result;
 }
+bool SupervisorCredentialStore::ReadEndpointCredential(SecureBuffer& credential,std::wstring& reason) const {
+    if(!VerifyProtectedDacl(root_,reason)||!VerifyProtectedDacl(endpointCredentialPath_,reason))return false;
+    HANDLE file=CreateFileW(endpointCredentialPath_.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE){reason=GetLastError()==ERROR_FILE_NOT_FOUND?L"ENDPOINT_CREDENTIAL_NOT_PROVISIONED":L"ENDPOINT_STORE_OPEN_FAILED";return false;}
+    LARGE_INTEGER size{};if(!GetFileSizeEx(file,&size)||size.QuadPart<=0||size.QuadPart>static_cast<LONGLONG>(kMaxBlobBytes)){CloseHandle(file);reason=L"ENDPOINT_STORE_BLOB_SIZE_INVALID";return false;}
+    std::vector<BYTE> blob(static_cast<size_t>(size.QuadPart));DWORD read=0;bool ok=ReadFile(file,blob.data(),static_cast<DWORD>(blob.size()),&read,nullptr)&&read==blob.size();CloseHandle(file);
+    if(!ok){SecureZeroMemory(blob.data(),blob.size());reason=L"ENDPOINT_STORE_BLOB_READ_FAILED";return false;}
+    bool result=Unprotect(blob.data(),blob.size(),credential,reason);SecureZeroMemory(blob.data(),blob.size());return result;
+}
+
 bool SupervisorCredentialStore::RemoveClientSecret(std::wstring& reason) const {
     if(DeleteFileW(filePath_.c_str())||GetLastError()==ERROR_FILE_NOT_FOUND){if(GetFileAttributesW(filePath_.c_str())==INVALID_FILE_ATTRIBUTES){reason.clear();return true;}}
     reason=L"STORE_REMOVE_FAILED";return false;
 }
+bool SupervisorCredentialStore::RemoveEndpointCredential(std::wstring& reason) const {
+    if(DeleteFileW(endpointCredentialPath_.c_str())||GetLastError()==ERROR_FILE_NOT_FOUND){if(GetFileAttributesW(endpointCredentialPath_.c_str())==INVALID_FILE_ATTRIBUTES){reason.clear();return true;}}
+    reason=L"ENDPOINT_STORE_REMOVE_FAILED";return false;
+}
+bool SupervisorCredentialStore::EndpointCredentialExists() const {return GetFileAttributesW(endpointCredentialPath_.c_str())!=INVALID_FILE_ATTRIBUTES;}
+
 bool SupervisorCredentialStore::Exists() const {return GetFileAttributesW(filePath_.c_str())!=INVALID_FILE_ATTRIBUTES;}
 } // namespace phone_supervisor::r5
