@@ -136,8 +136,20 @@ async fn live() -> axum::response::Response {
 
 async fn ready(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     let database_ready = readiness(&state.pool).await;
-    tracing::info!(process_id = std::process::id(), database_ready, "TEAM_ROOM_READINESS_REQUEST");
-    if database_ready {
+    let oidc_required = env::var("TEAM_ROOM_REQUIRE_OIDC")
+        .ok()
+        .map(|value| value != "false")
+        .unwrap_or(true);
+    let oidc_ready = !oidc_required || state.oidc.is_some();
+    let ready = database_ready && oidc_ready;
+    tracing::info!(
+        process_id = std::process::id(),
+        database_ready,
+        oidc_required,
+        oidc_ready,
+        "TEAM_ROOM_READINESS_REQUEST"
+    );
+    if ready {
         (
             StatusCode::OK,
             Json(HealthResponse {
