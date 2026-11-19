@@ -72,6 +72,21 @@ export class PhoneRuntimeClient {
     return payload;
   }
 
+  async getSnapshot() {
+    const snapshot = await this.request("GET", "/ai-phone/me");
+    if (!snapshot || typeof snapshot !== "object") {
+      throw new PhoneRuntimeError("AI Phone snapshot response is invalid", 502, "INVALID_RESPONSE");
+    }
+    return snapshot;
+  }
+
+  async heartbeat(endpointFence) {
+    if (!Number.isInteger(endpointFence) || endpointFence < 0) {
+      throw new PhoneRuntimeError("endpointFence must be a non-negative integer", 0, "INVALID_ARGUMENT");
+    }
+    return this.request("POST", "/ai-phone/heartbeat", { endpoint_fence: endpointFence });
+  }
+
   async poll() {
     const messages = await this.request("GET", `/ai-phone/${encodeURIComponent(this.phoneId)}/messages`);
     if (!Array.isArray(messages)) {
