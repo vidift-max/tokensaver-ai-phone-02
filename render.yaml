@@ -20,6 +20,23 @@ services:
       - key: OIDC_JWKS_URL
         sync: false
 
+  - type: web
+    name: ai-phone-02-agent
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/ai-phone-02-agent/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/live
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_PHONE_EXECUTOR_TOKEN
+        generateValue: true
+      - key: AI_PHONE_MODEL
+        value: gpt-6-luna
+      - key: AI_PHONE_SYSTEM_PROMPT
+        sync: false
+
 databases:
   - name: ai-phone-02-postgres
     plan: free
