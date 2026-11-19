@@ -55,6 +55,6 @@ async function setupDb(subject){
  await c.query('COMMIT');console.log(JSON.stringify({status:'provisioned',issuer,phone_id:phone,endpoint_id:endpoint,room_id:room,principal_id:principal,subject}));
  }catch(x){await c.query('ROLLBACK');throw x}finally{c.release();await pool.end()}
 }
-async function run(){for(let i=0;i<30;i++){try{const t=await adminToken();const s=await setupKeycloak(t);await setupDb(s);return}catch(x){if(i===29)throw x;await new Promise(r=>setTimeout(r,5000))}}}
+async function run(){let attempt=0;for(;;){attempt++;try{const t=await adminToken();const s=await setupKeycloak(t);await setupDb(s);console.log(JSON.stringify({event:'provisioning_complete',attempt}));return}catch(x){console.error(JSON.stringify({event:'provisioning_retry',attempt,error:x.message}));await new Promise(r=>setTimeout(r,15000))}}}
 const server=http.createServer((req,res)=>{if(req.method==='GET'&&req.url==='/health/live'){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({service:'ai-phone-02-provisioner',status:'live'}));return}res.writeHead(404);res.end()});
-server.listen(Number(e.PORT||10000),'0.0.0.0',()=>run().catch(x=>{console.error('provisioning failed',x.message);process.exitCode=1}));
+server.listen(Number(e.PORT||10000),'0.0.0.0',()=>{console.log('provisioner listening; waiting for Keycloak and retrying until provisioning succeeds');run().catch(x=>{console.error('unexpected provisioning loop failure',x.message);process.exitCode=1})});
