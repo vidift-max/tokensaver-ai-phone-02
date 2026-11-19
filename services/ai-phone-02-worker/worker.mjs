@@ -2,11 +2,15 @@ import http from "node:http";
 import { PhoneRuntimeClient } from "./scripts/phone-runtime-client.mjs";
 import { RemoteAiExecutor } from "./scripts/remote-ai-executor.mjs";
 
-const client = new PhoneRuntimeClient();
-const executor = new RemoteAiExecutor();
+let client = null;
+let executor = null;
 const recipient = process.env.AI_PHONE_REPLY_TO_ID || "";
 
-if (!recipient) throw new Error("AI_PHONE_REPLY_TO_ID is required");
+function requireRuntimeConfig() {
+  if (!recipient) throw new Error("AI_PHONE_REPLY_TO_ID is required");
+  if (!client) client = new PhoneRuntimeClient();
+  if (!executor) executor = new RemoteAiExecutor();
+}
 
 const seen = new Set();
 const interval = Number(process.env.AI_PHONE_POLL_MS || 2000);
@@ -31,6 +35,7 @@ let ticking = false;
 let stopping = false;
 
 async function refreshBinding() {
+  requireRuntimeConfig();
   const snapshot = await client.getSnapshot();
   endpointFence = snapshot?.attachment?.endpoint_fence;
   if (!Number.isInteger(endpointFence)) {
@@ -39,6 +44,7 @@ async function refreshBinding() {
 }
 
 async function ensureHeartbeat(force = false) {
+  requireRuntimeConfig();
   const now = Date.now();
   if (!force && now - lastHeartbeat < heartbeatEvery) return;
   if (!Number.isInteger(endpointFence)) await refreshBinding();
@@ -48,6 +54,7 @@ async function ensureHeartbeat(force = false) {
 
 async function tick() {
   if (stopping || ticking) return;
+  requireRuntimeConfig();
   ticking = true;
   try {
     await ensureHeartbeat();
@@ -129,6 +136,7 @@ const server = http.createServer((request, response) => {
 server.listen(port, host, async () => {
   console.log("AI-PHONE-02 worker starting");
   try {
+    requireRuntimeConfig();
     await refreshBinding();
     await guardedTick();
   } catch (error) {
