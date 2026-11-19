@@ -94,3 +94,15 @@ test("exchanges OIDC workload credentials and tracks the local session expiry", 
   assert.equal(client.shouldRenewSession(Date.now(), 60000), false);
   assert.equal(client.shouldRenewSession(Date.parse(expiresAt)-30000, 60000), true);
 });
+
+test("sends a separate Team Room presence heartbeat", async () => {
+  let captured;
+  const client = new PhoneRuntimeClient(config, async (url, init) => {
+    captured = {url,init};
+    return response(200, {last_seen_at:"2026-11-19T21:05:00Z"});
+  });
+  await client.heartbeatRoom();
+  assert.equal(captured.url, "https://phone.example.test/team-room/heartbeat");
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.headers.authorization, "Bearer session-secret");
+});
