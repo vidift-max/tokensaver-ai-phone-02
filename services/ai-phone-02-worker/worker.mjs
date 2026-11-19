@@ -38,7 +38,7 @@ let stopping = false;
 
 async function refreshBinding() {
   requireRuntimeConfig();
-  if (!client.sessionToken) await client.exchangeOidcSession();
+  if (!client.sessionToken) {\n    await client.exchangeOidcSession();\n    await client.joinRoom();\n  }
   let snapshot;
   try {
     snapshot = await client.getSnapshot();
