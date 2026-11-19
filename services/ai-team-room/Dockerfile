@@ -7,7 +7,7 @@ COPY public ./public
 COPY src ./src
 RUN npm run build
 
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.100.0-bookworm AS builder
 WORKDIR /workspace
 COPY services/ai-team-room ./services/ai-team-room
 RUN cargo build --release --manifest-path services/ai-team-room/Cargo.toml
