@@ -15,13 +15,18 @@ export class PhoneRuntimeError extends Error {
 export class PhoneRuntimeClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
     this.baseUrl = (env.AI_PHONE_API_URL || "").replace(/\/+$/, "");
-    this.sessionToken = env.AI_PHONE_SESSION_TOKEN || "";\n    this.oidcIssuer = (env.AI_PHONE_OIDC_ISSUER || "").replace(/\\/+$/, "");\n    this.oidcClientId = env.AI_PHONE_OIDC_CLIENT_ID || "";\n    this.oidcClientSecret = env.AI_PHONE_OIDC_CLIENT_SECRET || "";\n    this.roomId = env.TEAM_ROOM_ROOM_ID || "";
+    this.sessionToken = env.AI_PHONE_SESSION_TOKEN || "";
+    this.oidcIssuer = (env.AI_PHONE_OIDC_ISSUER || "").replace(/\\/+$/, "");
+    this.oidcClientId = env.AI_PHONE_OIDC_CLIENT_ID || "";
+    this.oidcClientSecret = env.AI_PHONE_OIDC_CLIENT_SECRET || "";
+    this.roomId = env.TEAM_ROOM_ROOM_ID || "";
     this.endpointCredential = env.AI_PHONE_ENDPOINT_CREDENTIAL || "";
-    this.phoneId = env.AI_PHONE_ID || "";\n    this.endpointId = env.PHONE02_ENDPOINT_ID || "";
+    this.phoneId = env.AI_PHONE_ID || "";
+    this.endpointId = env.PHONE02_ENDPOINT_ID || "";
     this.fetch = fetchImpl;
-    if (!this.baseUrl || !this.sessionToken || !this.endpointCredential || !this.phoneId) {
+    if (!this.baseUrl || !this.endpointCredential || !this.phoneId || !this.endpointId || (!this.sessionToken && (!this.oidcIssuer || !this.oidcClientId || !this.oidcClientSecret || !this.roomId))) {
       throw new PhoneRuntimeError(
-        "AI_PHONE_API_URL, AI_PHONE_SESSION_TOKEN, AI_PHONE_ENDPOINT_CREDENTIAL and AI_PHONE_ID are required",
+        "AI_PHONE_API_URL, endpoint credential, phone identity, endpoint identity and either session token or OIDC runtime credentials are required",
         0, "CONFIG_REQUIRED"
       );
     }
@@ -70,6 +75,31 @@ export class PhoneRuntimeClient {
       throw new PhoneRuntimeError(`AI Phone rejected ${method} ${route} (HTTP ${response.status})`, response.status, code);
     }
     return payload;
+  }
+
+  async oidcToken() {
+    if (!this.oidcIssuer || !this.oidcClientId || !this.oidcClientSecret) throw new PhoneRuntimeError("OIDC runtime credentials are required", 0, "CONFIG_REQUIRED");
+    const body = new URLSearchParams({client_id:this.oidcClientId,client_secret:this.oidcClientSecret,grant_type:"client_credentials",scope:"team_room:connect"});
+    const response = await this.fetch(this.oidcIssuer + "/realms/team-room/protocol/openid-connect/token", {method:"POST",redirect:"error",headers:{"content-type":"application/x-www-form-urlencoded",accept:"application/json"},body,signal:AbortSignal.timeout(10000)});
+    if (!response.ok) throw new PhoneRuntimeError("OIDC token acquisition failed", response.status, "OIDC_AUTH_FAILED");
+    const payload = await response.json();
+    if (typeof payload.access_token !== "string" || !payload.access_token) throw new PhoneRuntimeError("OIDC token response is invalid", 502, "INVALID_RESPONSE");
+    return payload.access_token;
+  }
+
+  async exchangeOidcSession() {
+    const token = await this.oidcToken();
+    const response = await this.fetch(this.baseUrl + "/auth/exchange", {method:"POST",redirect:"error",headers:{authorization:"Bearer "+token,"content-type":"application/json",accept:"application/json"},body:JSON.stringify({room_id:this.roomId}),signal:AbortSignal.timeout(10000)});
+    if (!response.ok) throw new PhoneRuntimeError("Team Room OIDC exchange failed", response.status, "OIDC_EXCHANGE_FAILED");
+    const payload = await response.json();
+    if (typeof payload.access_token !== "string" || !payload.access_token) throw new PhoneRuntimeError("Team Room exchange response is invalid", 502, "INVALID_RESPONSE");
+    this.sessionToken = payload.access_token;
+    return payload;
+  }
+
+  async attach() {
+    if (!this.endpointId) throw new PhoneRuntimeError("PHONE02_ENDPOINT_ID is required", 0, "CONFIG_REQUIRED");
+    return this.request("POST", "/ai-phone/attach", {endpoint_id:this.endpointId,endpoint_type:"WORKER",metadata:{label:"AI-PHONE-02 independent runtime"}});
   }
 
   async getSnapshot() {
