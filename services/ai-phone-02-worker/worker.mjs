@@ -129,6 +129,15 @@ async function guardedTick() {
     await tick();
   } catch (error) {
     console.error("worker tick failed", JSON.stringify({code:error.code||null,status:error.status||null,message:error.message}));
+    if (error.code === "AUTHORIZATION_LOST") {
+      // Never reuse a session rejected by the server. The next tick performs
+      // a fresh OIDC exchange, rejoins the room and revalidates the endpoint fence.
+      client.sessionToken = "";
+      endpointFence = null;
+      lastHeartbeat = 0;
+      nextBindingRetryAt = Date.now() + 1000;
+      return;
+    }
     if (["OIDC_AUTH_FAILED","OIDC_EXCHANGE_FAILED","OIDC_RETRY_BACKOFF"].includes(error.code)) return;
     try {
       await ensureHeartbeat(true);
