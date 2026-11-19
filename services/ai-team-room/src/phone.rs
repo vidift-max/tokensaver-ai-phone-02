@@ -477,6 +477,14 @@ pub async fn attach(
             .bind(current_attachment).bind(identity.tenant_id).bind(phone.ai_id).execute(&mut *tx).await?;
         sqlx::query("UPDATE phone_endpoints SET endpoint_status='DETACHED',detached_at=NOW() WHERE endpoint_id=(SELECT endpoint_id FROM phone_attachments WHERE attachment_id=$1 AND tenant_id=$2 AND ai_id=$3) AND tenant_id=$2 AND ai_id=$3 AND endpoint_status<>'REVOKED'")
             .bind(current_attachment).bind(identity.tenant_id).bind(phone.ai_id).execute(&mut *tx).await?;
+        // A dead/revoked session may be replaced by a fresh workload session.
+        // Release only the fence belonging to the attachment just fenced; the
+        // pre-enrolled credential remains ACTIVE and is rebound below to the
+        // new attachment generation. A live old session was rejected above.
+        sqlx::query(
+            "UPDATE phone_endpoint_credentials SET endpoint_fence=NULL,last_used_at=NOW() WHERE endpoint_id=(SELECT endpoint_id FROM phone_attachments WHERE attachment_id=$1 AND tenant_id=$2 AND ai_id=$3) AND tenant_id=$2 AND ai_id=$3 AND credential_status='ACTIVE' AND endpoint_fence=(SELECT endpoint_fence FROM phone_attachments WHERE attachment_id=$1 AND tenant_id=$2 AND ai_id=$3)"
+        ).bind(current_attachment).bind(identity.tenant_id).bind(phone.ai_id)
+            .execute(&mut *tx).await?;
     }
 
     // New endpoint must present its pre-enrolled credential; AI bearer possession alone is insufficient.

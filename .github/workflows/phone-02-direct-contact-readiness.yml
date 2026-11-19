@@ -1,0 +1,49 @@
+name: Phone-02 Direct Contact Readiness
+
+on:
+  push:
+    branches:
+      - mission/remote-contact-tablet-first
+    paths:
+      - 'src/**'
+      - 'services/ai-team-room/**'
+      - 'services/phone-supervisor/**'
+      - 'release/phone-02/**'
+      - 'scripts/phone-runtime-client.mjs'
+      - 'scripts/team-room-client.mjs'
+      - 'tests/**'
+      - '.github/workflows/phone-02-direct-contact-readiness.yml'
+  pull_request:
+    branches:
+      - v2-saas-alpha
+    paths:
+      - 'src/**'
+      - 'services/ai-team-room/**'
+      - 'services/phone-supervisor/**'
+      - 'release/phone-02/**'
+      - 'scripts/phone-runtime-client.mjs'
+      - 'scripts/team-room-client.mjs'
+      - 'tests/**'
+      - '.github/workflows/phone-02-direct-contact-readiness.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phone02-direct-contact-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build unsigned Phone-02 package and Supervisor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\release\phone-02\build-unsigned-msix.ps1 -ExpectedSourceSha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Phone-02 release build failed' }

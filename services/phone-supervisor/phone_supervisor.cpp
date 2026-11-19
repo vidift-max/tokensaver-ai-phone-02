@@ -39,12 +39,14 @@ static const ULONGLONG SESSION_IDLE_MS=60000;
 static SERVICE_STATUS_HANDLE gStatusHandle=nullptr;
 static SERVICE_STATUS gStatus{};
 static HANDLE gStopEvent=nullptr;
-static std::wstring gConfigPath,gLogPath,gExpectedFamily,gExpectedFull,gExpectedAppSid,gRpcAllowedAppSid,gRpcAllowedUserSid,gServiceSid,gExpectedUserSid,gTeamRoomFakeMode,gTeamRoomTestPhoneId,gTeamRoomTestEndpointId,gTeamRoomTestRecipientId,gTeamRoomHttpsEndpoint;
+static std::wstring gConfigPath,gLogPath,gExpectedFamily,gExpectedFull,gExpectedAppSid,gRpcAllowedAppSid,gRpcAllowedUserSid,gServiceSid,gExpectedUserSid,gTeamRoomFakeMode,gTeamRoomTestPhoneId,gTeamRoomTestEndpointId,gTeamRoomTestRecipientId,gTeamRoomHttpsEndpoint,gTeamRoomRoomId,gTeamRoomEndpointId,gProvisionedAiPhoneId;
 static std::mutex gMutex;static std::mutex gLogMutex;static HANDLE gLogHandle=INVALID_HANDLE_VALUE;
 static bool gStopping=false;
-static bool gR5TestMode=false,gR5CredentialLoaded=false;
+static bool gR5TestMode=false,gR5CredentialLoaded=false,gEndpointCredentialRequired=false;
 static std::wstring gCredentialStoreRoot;
 static phone_supervisor::r5::SecureBuffer gOidcAccessToken;
+static phone_supervisor::r5::SecureBuffer gEndpointCredential;
+static std::unique_ptr<phone_supervisor::RealSupervisorTeamRoomHttpsAdapter> gRealTeamRoomAdapter;
 enum RpcStatus:long{RPC_OK=0,RPC_INVALID_ARGUMENT=1,RPC_ACCESS_DENIED=2,RPC_SESSION_NOT_FOUND=3,RPC_SESSION_EXPIRED=4,RPC_REPLAY=5,RPC_INTERNAL_ERROR=6,RPC_SERVICE_STOPPING=7};
 static_assert(phone_supervisor::r4::kRpcOk==RPC_OK && phone_supervisor::r4::kRpcAccessDenied==RPC_ACCESS_DENIED,"R4 gate RPC status contract mismatch");
 struct ObservedIdentity{DWORD pid=0,windowsSession=0;FILETIME created{};bool isAppContainer=false;std::wstring userSid,appSid,family,full;};
@@ -131,6 +133,33 @@ static bool RunR5OidcScenario(phone_supervisor::r5::SupervisorCredentialStore& s
  }
  secret.Clear();Log(L"OIDC_SECRET_BUFFER_ZEROED=PASS");
  Log(L"SUPERVISOR_OIDC_TOKEN_EXCHANGE=PASS");
+ if(acquired&&!gOidcAccessToken.empty()&&!gTeamRoomHttpsEndpoint.empty()&&!gTeamRoomRoomId.empty()){
+  std::wstring endpointCredentialReason;
+  if(store.ReadEndpointCredential(gEndpointCredential,endpointCredentialReason)){
+   Log(L"ENDPOINT_CREDENTIAL_STORE_READ=PASS");
+  }else{
+   Log(L"ENDPOINT_CREDENTIAL_STORE_READ=BLOCKED reason="+endpointCredentialReason);
+  }
+  gRealTeamRoomAdapter=std::make_unique<phone_supervisor::RealSupervisorTeamRoomHttpsAdapter>();
+  gRealTeamRoomAdapter->Configure(
+    gTeamRoomHttpsEndpoint,
+    std::string(gTeamRoomRoomId.begin(),gTeamRoomRoomId.end()));
+  std::string oidc(reinterpret_cast<const char*>(gOidcAccessToken.data()),gOidcAccessToken.size());
+  if(gRealTeamRoomAdapter->authenticate(oidc)){
+   Log(L"TEAM_ROOM_AUTH_EXCHANGE_CALLED=PASS");
+   Log(L"TEAM_ROOM_REAL_SESSION=PASS");
+  }else{
+   gRealTeamRoomAdapter->Clear();
+   gRealTeamRoomAdapter.reset();
+   Log(L"TEAM_ROOM_AUTH_EXCHANGE_CALLED=FAIL");
+   Log(L"TEAM_ROOM_REAL_SESSION=BLOCKED");
+   ok=false;
+  }
+  SecureZeroMemory(oidc.data(),oidc.size());
+ }else{
+  Log(L"TEAM_ROOM_AUTH_EXCHANGE_CALLED=BLOCKED_CONFIG");
+  Log(L"TEAM_ROOM_REAL_SESSION=BLOCKED");
+ }
  Log(L"RPC_AUTH_EXCHANGE_CALLED=NO");
  Log(L"R5_VERDICT="+std::wstring((ok&&acquired&&!gOidcAccessToken.empty())?L"PASS":L"BLOCKED"));
  FreeLibrary(module);
@@ -263,6 +292,8 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
   Log(L"TEAM_ROOM_HEALTH=NOT_CONFIGURED");
  }
  Log(L"TEAM_ROOM_HEALTH_NOT_AUTH=PASS");
+ const bool realTeamRoomSessionAuthenticated=
+  gRealTeamRoomAdapter&&gRealTeamRoomAdapter->authenticated();
  const bool fakeMode=(gTeamRoomFakeMode==L"1");
  if(gTeamRoomFakeMode!=L"0"&&!fakeMode){
   Log(L"TEAM_ROOM_FAKE_MODE=INVALID");
@@ -272,6 +303,43 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
  bool fakeScenarioSucceeded=false;
  if(!fakeMode){
   Log(L"TEAM_ROOM_FAKE_MODE=DISABLED");
+  if(!realTeamRoomSessionAuthenticated||gProvisionedAiPhoneId.empty()||gTeamRoomEndpointId.empty()){
+   Log(L"TEAM_ROOM_REAL_CONFIG=BLOCKED");
+   *status=RPC_ACCESS_DENIED;return;
+  }
+  phone_supervisor::ProvisionedPhoneBinding provisioned{
+   Ascii(gProvisionedAiPhoneId),Ascii(gTeamRoomEndpointId),
+   Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),
+   gEndpointCredential.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(gEndpointCredential.data()),gEndpointCredential.size()),
+   1};
+  phone_supervisor::TeamRoomAttachment realAttachment;
+  if(!gRealTeamRoomAdapter->attach(provisioned,realAttachment)){
+   Log(L"TEAM_ROOM_REAL_ATTACH=FAIL");
+   *status=RPC_ACCESS_DENIED;return;
+  }
+  Log(L"TEAM_ROOM_REAL_ATTACH=PASS");
+  if(!gRealTeamRoomAdapter->heartbeat(realAttachment)){
+   Log(L"TEAM_ROOM_REAL_HEARTBEAT=FAIL");
+   *status=RPC_INTERNAL_ERROR;return;
+  }
+  Log(L"TEAM_ROOM_REAL_HEARTBEAT=PASS");
+  phone_supervisor::TeamRoomMessage receipt;
+  const std::string handshake=
+   "AI-PHONE-02 Supervisor: authenticated Team Room session established; identity verified by server.";
+  if(!gRealTeamRoomAdapter->send(realAttachment,"",handshake,
+     "6b7c5e2a-1d93-4f4e-9d31-0a9d4a8d1f02",receipt)){
+   Log(L"TEAM_ROOM_REAL_FIRST_MESSAGE=FAIL");
+   *status=RPC_INTERNAL_ERROR;return;
+  }
+  Log(L"TEAM_ROOM_REAL_FIRST_MESSAGE=PASS");
+  std::vector<phone_supervisor::TeamRoomMessage> inbox;
+  if(!gRealTeamRoomAdapter->receive(realAttachment,inbox)){
+   Log(L"TEAM_ROOM_REAL_RECEIVE=FAIL");
+   *status=RPC_INTERNAL_ERROR;return;
+  }
+  Log(L"TEAM_ROOM_REAL_RECEIVE=PASS");
+  *status=RPC_OK;
+  return;
  }else{
   const std::string phoneId=Ascii(gTeamRoomTestPhoneId),endpointId=Ascii(gTeamRoomTestEndpointId),recipientId=Ascii(gTeamRoomTestRecipientId);
   if(phoneId!="TEST-AI-PHONE-02"||endpointId!="TEST-ENDPOINT-02"||recipientId!="FAKE-RECIPIENT-PHONE"||
@@ -279,7 +347,7 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
   phone_supervisor::FakeSupervisorTeamRoomAdapter adapter;
   if(adapter.authenticate("INVALID-ASSERTION")){*status=RPC_INTERNAL_ERROR;return;}Log(L"TEAM_ROOM_FAKE_AUTH_FAILURE=PASS");
   if(!adapter.authenticate("P2.37-TEST-ONLY-ASSERTION")){*status=RPC_INTERNAL_ERROR;return;}Log(L"TEAM_ROOM_FAKE_AUTHENTICATE=PASS");
-  phone_supervisor::ProvisionedPhoneBinding provisioned{phoneId,endpointId,Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),1};
+  phone_supervisor::ProvisionedPhoneBinding provisioned{phoneId,endpointId,Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),"",1};
   auto wrong=provisioned;wrong.ai_phone_id="CLIENT-CHOSEN-IDENTITY";
   phone_supervisor::TeamRoomAttachment attachment;
   if(adapter.attach(wrong,attachment)){*status=RPC_INTERNAL_ERROR;return;}Log(L"TEAM_ROOM_FAKE_IDENTITY_MISMATCH=PASS");
@@ -308,9 +376,9 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
   Log(L"TEAM_ROOM_FAKE_SCENARIO=PASS");
   Log(L"TEAM_ROOM_FAKE_NOT_AUTHENTICATED=PASS");
  }
- // A client_credentials token alone is not a Team Room session.
- // R5 deliberately does not call /auth/exchange.
- const bool realTeamRoomSessionAuthenticated=false;
+ // The real adapter has already exchanged the one-use OIDC assertion for a
+ // Team Room bearer. The RPC gate below may now use that session, but only
+ // after the server confirms the provisioned AI-PHONE-02 identity.
  const auto secretState=gR5CredentialLoaded?phone_supervisor::r4::SupervisorSecretState::Valid:phone_supervisor::r4::SupervisorSecretState::StoreAbsent;
  const auto decision=phone_supervisor::r4::Evaluate(
   true,
@@ -344,7 +412,7 @@ static RPC_STATUS RPC_ENTRY SupervisorSecurityCallback(RPC_IF_HANDLE,void* conte
 static void WINAPI ServiceMain(DWORD,LPWSTR*){
  gStatusHandle=RegisterServiceCtrlHandlerW(L"TokenSaverPhone02Supervisor",Handler);if(!gStatusHandle)return;SetUnhandledExceptionFilter(SupervisorUnhandledException);SetState(SERVICE_START_PENDING,NO_ERROR,15000);int argc=0;LPWSTR*argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(!argv||argc<3){if(argv)LocalFree(argv);SetState(SERVICE_STOPPED,ERROR_INVALID_PARAMETER);return;}gConfigPath=argv[2];LocalFree(argv);gLogPath=gConfigPath+L".log";gLogHandle=CreateFileW(gLogPath.c_str(),FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
  if(gLogHandle!=INVALID_HANDLE_VALUE){LARGE_INTEGER logSize{};if(GetFileSizeEx(gLogHandle,&logSize)&&logSize.QuadPart==0){const BYTE bom[2]={0xFF,0xFE};DWORD bomWritten=0;WriteFile(gLogHandle,bom,sizeof(bom),&bomWritten,nullptr);FlushFileBuffers(gLogHandle);}}
- gExpectedFamily=ReadValue(L"PACKAGE_FAMILY");gExpectedFull=ReadValue(L"PACKAGE_FULL");gExpectedAppSid=ReadValue(L"APPCONTAINER_SID");gRpcAllowedAppSid=ReadValue(L"RPC_CLIENT_APPCONTAINER_SID");gServiceSid=ReadValue(L"SERVICE_SID");gExpectedUserSid=ReadValue(L"USER_SID");gRpcAllowedUserSid=ReadValue(L"RPC_CLIENT_USER_SID");gTeamRoomFakeMode=ReadValue(L"TEAM_ROOM_FAKE_MODE");gTeamRoomTestPhoneId=ReadValue(L"TEAM_ROOM_TEST_AI_PHONE_ID");gTeamRoomTestEndpointId=ReadValue(L"TEAM_ROOM_TEST_ENDPOINT_ID");gTeamRoomTestRecipientId=ReadValue(L"TEAM_ROOM_TEST_RECIPIENT_ID");gTeamRoomHttpsEndpoint=ReadValue(L"TEAM_ROOM_HTTPS_ENDPOINT");gR5TestMode=ReadValue(L"R5_TEST_MODE")==L"1";gCredentialStoreRoot=ReadValue(L"CREDENTIAL_STORE_ROOT");
+ gExpectedFamily=ReadValue(L"PACKAGE_FAMILY");gExpectedFull=ReadValue(L"PACKAGE_FULL");gExpectedAppSid=ReadValue(L"APPCONTAINER_SID");gRpcAllowedAppSid=ReadValue(L"RPC_CLIENT_APPCONTAINER_SID");gServiceSid=ReadValue(L"SERVICE_SID");gExpectedUserSid=ReadValue(L"USER_SID");gRpcAllowedUserSid=ReadValue(L"RPC_CLIENT_USER_SID");gTeamRoomFakeMode=ReadValue(L"TEAM_ROOM_FAKE_MODE");gTeamRoomTestPhoneId=ReadValue(L"TEAM_ROOM_TEST_AI_PHONE_ID");gTeamRoomTestEndpointId=ReadValue(L"TEAM_ROOM_TEST_ENDPOINT_ID");gTeamRoomTestRecipientId=ReadValue(L"TEAM_ROOM_TEST_RECIPIENT_ID");gTeamRoomHttpsEndpoint=ReadValue(L"TEAM_ROOM_HTTPS_ENDPOINT");gTeamRoomRoomId=ReadValue(L"TEAM_ROOM_ROOM_ID");gTeamRoomEndpointId=ReadValue(L"TEAM_ROOM_ENDPOINT_ID");gProvisionedAiPhoneId=ReadValue(L"AI_PHONE_ID");gR5TestMode=ReadValue(L"R5_TEST_MODE")==L"1";gEndpointCredentialRequired=ReadValue(L"ENDPOINT_CREDENTIAL_REQUIRED")==L"1";gCredentialStoreRoot=ReadValue(L"CREDENTIAL_STORE_ROOT");
  if(gExpectedFamily.empty()||gExpectedFull.empty()||gExpectedAppSid.empty()||gRpcAllowedAppSid.empty()||gRpcAllowedUserSid.empty()||gServiceSid.empty()||gExpectedUserSid.empty()||(gR5TestMode&&gCredentialStoreRoot.empty())){Log(L"SERVICE_CONFIG=INVALID");SetState(SERVICE_STOPPED,ERROR_INVALID_DATA);return;}
  if(!CurrentProcessIsLocalService()){Log(L"LOCAL_SERVICE=FAIL");SetState(SERVICE_STOPPED,ERROR_ACCESS_DENIED);return;}
  Log(L"LOCAL_SERVICE=PASS");
@@ -383,6 +451,18 @@ static void WINAPI ServiceMain(DWORD,LPWSTR*){
      Log(provisionResult);
      if(provisionResult==L"CREDENTIAL_PROVISIONED=PASS"){
       Log(L"CREDENTIAL_PROVISIONING_ADMIN_ONLY=PASS");
+      if(gEndpointCredentialRequired){
+       std::wstring endpointProvisionResult;
+       HANDLE endpointReadyEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+       if(endpointReadyEvent){
+        std::thread endpointProvisioningThread([&](){phone_supervisor::r5::ProvisionEndpointCredentialThroughAdminPipe(*r5Store,gServiceSid,gStopEvent,endpointReadyEvent,endpointProvisionResult);});
+        HANDLE endpointWaits[2]={gStopEvent,endpointReadyEvent};
+        DWORD endpointWait=WaitForMultipleObjects(2,endpointWaits,FALSE,65000);
+        if(endpointProvisioningThread.joinable())endpointProvisioningThread.join();
+        Log(endpointWait==WAIT_OBJECT_0+1?endpointProvisionResult:L"ENDPOINT_CREDENTIAL_PROVISIONING=TIMEOUT");
+        CloseHandle(endpointReadyEvent);
+       }else Log(L"ENDPOINT_CREDENTIAL_PROVISIONING=EVENT_CREATE_FAILED");
+      }
       RunR5OidcScenario(*r5Store);
      }else Log(L"CREDENTIAL_PROVISIONING_ADMIN_ONLY=FAIL");
     }else{
@@ -397,10 +477,10 @@ static void WINAPI ServiceMain(DWORD,LPWSTR*){
  RpcMgmtStopServerListening(nullptr);RpcMgmtWaitServerListen();RpcServerUnregisterIf(PhoneSupervisorRpc_v1_1_s_ifspec,nullptr,TRUE);
  {std::lock_guard<std::mutex>l(gMutex);for(auto&kv:gSessions)SecureZeroMemory(kv.second.nonceHash.data(),kv.second.nonceHash.size());gSessions.clear();}
  if(gR5TestMode){
-  gOidcAccessToken.Clear();Log(L"TOKEN_MEMORY_ZEROED=PASS");
-  std::wstring removeReason;bool removed=r5Store&&r5Store->RemoveClientSecret(removeReason);
-  Log(std::wstring(L"CREDENTIAL_REMOVE=")+(removed?L"PASS":L"FAIL"));
-  bool clean=removed&&gOidcAccessToken.empty()&&(!r5Store||!r5Store->Exists());
+  gOidcAccessToken.Clear();gEndpointCredential.Clear();if(gRealTeamRoomAdapter){gRealTeamRoomAdapter->Clear();gRealTeamRoomAdapter.reset();}Log(L"TOKEN_MEMORY_ZEROED=PASS");
+  std::wstring removeReason;bool removed=r5Store&&r5Store->RemoveClientSecret(removeReason);std::wstring endpointRemoveReason;bool endpointRemoved=!gEndpointCredentialRequired||(r5Store&&r5Store->RemoveEndpointCredential(endpointRemoveReason));
+  Log(std::wstring(L"CREDENTIAL_REMOVE=")+(removed?L"PASS":L"FAIL"));Log(std::wstring(L"ENDPOINT_CREDENTIAL_REMOVE=")+(endpointRemoved?L"PASS":L"FAIL"));
+  bool clean=removed&&endpointRemoved&&gOidcAccessToken.empty()&&gEndpointCredential.empty()&&(!r5Store||(!r5Store->Exists()&&!r5Store->EndpointCredentialExists()));
   Log(std::wstring(L"CLEANUP=")+(clean?L"PASS":L"FAIL"));
   gR5CredentialLoaded=false;
  }

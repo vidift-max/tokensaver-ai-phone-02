@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: 22
       - name: Install Tauri Linux dependencies
-        timeout-minutes: 8
+        timeout-minutes: 20
         run: |
           if [ -f /etc/apt/apt-mirrors.txt ]; then
             sudo sed -i 's|azure.archive.ubuntu.com|mirrors.edge.kernel.org|g' /etc/apt/apt-mirrors.txt

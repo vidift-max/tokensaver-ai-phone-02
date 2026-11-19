@@ -1,147 +1,293 @@
+/// <reference types="vite/client" />
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type Message = { message_id:string; sender_principal_id:string; sender_display_name:string; parent_message_id:string|null; body:string; created_at:string };
-type Presence = { participant_id:string; principal_id:string; display_name:string; provider:string; last_activity_at:string; current_task_id:string|null; connected:boolean; state:string };
-type Task = { task_id:string; mission_id:string; status:string; owner_principal_id:string|null; fencing_token:number; checkpoint:unknown; checkpoint_version:number };
-type Decision = { decision_id:string; title:string; decision:string; author_principal_id:string; created_at:string };
-type Attachment = { attachment_id:string; file_name:string; storage_ref:string; channel_id:string; created_at:string };
+type Message = {
+  message_id: string;
+  sender_principal_id: string;
+  sender_display_name: string;
+  parent_message_id: string | null;
+  body: string;
+  created_at: string;
+};
+
+type SpeechRecognitionResultLike = { transcript: string };
+type SpeechRecognitionEventLike = { results: ArrayLike<ArrayLike<SpeechRecognitionResultLike>> };
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+type SpeechWindow = Window & {
+  SpeechRecognition?: new () => SpeechRecognitionLike;
+  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+};
 
 export default function TeamRoom() {
-  const [apiUrl,setApiUrl]=useState("http://127.0.0.1:8081");
-  const [roomId,setRoomId]=useState("");
-  const [token,setToken]=useState("");
-  const [connected,setConnected]=useState(false);
-  const [connection,setConnection]=useState("DISCONNECTED");
-  const [messages,setMessages]=useState<Message[]>([]);
-  const [unreadCount,setUnreadCount]=useState(0);
-  const [participants,setParticipants]=useState<Presence[]>([]);
-  const [tasks,setTasks]=useState<Task[]>([]);
-  const [decisions,setDecisions]=useState<Decision[]>([]);
-  const [attachments,setAttachments]=useState<Attachment[]>([]);
-  const [draft,setDraft]=useState("");
-  const [replyTo,setReplyTo]=useState<string|null>(null);
-  const [privatePrincipal,setPrivatePrincipal]=useState("");
-  const [privateMode,setPrivateMode]=useState(false);
-  const [missionId,setMissionId]=useState("");
-  const [taskTitle,setTaskTitle]=useState("");
-  const [decisionTitle,setDecisionTitle]=useState("");
-  const [decisionBody,setDecisionBody]=useState("");
-  const [attachmentName,setAttachmentName]=useState("");
-  const [attachmentRef,setAttachmentRef]=useState("");
-  const [channelId,setChannelId]=useState("");
-  const [presenceState,setPresenceState]=useState("ONLINE");
-  const [error,setError]=useState("");
-  const [busy,setBusy]=useState(false);
-  const socketRef=useRef<WebSocket|null>(null);
+  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("phone02-api-url") || import.meta.env.VITE_TEAM_ROOM_API_URL || window.location.origin);
+  const [roomId, setRoomId] = useState(() => localStorage.getItem("phone02-room-id") || import.meta.env.VITE_TEAM_ROOM_ROOM_ID || "");
+  const [token, setToken] = useState(() => sessionStorage.getItem("phone02-session-token") || "");
+  const [autoReconnect, setAutoReconnect] = useState(() => localStorage.getItem("phone02-auto-reconnect") !== "false");
+  const [connected, setConnected] = useState(false);
+  const [connection, setConnection] = useState("DESCONECTADO");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const socketRef = useRef<WebSocket | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const heartbeatTimerRef = useRef<number | null>(null);
 
-  const request=useCallback(async(path:string,init:RequestInit={})=>{
-    const headers=new Headers(init.headers);headers.set("content-type","application/json");headers.set("authorization","Bearer "+token);
-    const response=await fetch(apiUrl.replace(/\/$/,"")+path,{...init,headers});
-    if(!response.ok) throw new Error("Team Room HTTP "+response.status);
-    if(response.status===204)return null;
-    return response.json();
-  },[apiUrl,token]);
+  useEffect(() => {
+    localStorage.setItem("phone02-api-url", apiUrl);
+    localStorage.setItem("phone02-room-id", roomId);
+    localStorage.setItem("phone02-auto-reconnect", String(autoReconnect));
+    if (token) sessionStorage.setItem("phone02-session-token", token);
+    else sessionStorage.removeItem("phone02-session-token");
+  }, [apiUrl, roomId, token, autoReconnect]);
 
-  const refresh=useCallback(async()=>{
-    if(!roomId||!token)return;
-    const [history,presence,taskRows,decisionRows,attachmentRows]=await Promise.all([
-      request(privateMode&&privatePrincipal?"/team-room/"+roomId+"/private/"+privatePrincipal+"/messages":"/team-room/"+roomId+"/messages"),
-      request("/team-room/"+roomId+"/presence"),
-      request("/team-room/"+roomId+"/tasks"),
-      request("/team-room/"+roomId+"/decisions"),
-      request("/team-room/"+roomId+"/attachments")
-    ]);
-    setMessages(history.items||[]);setUnreadCount(history.unread_count||0);setChannelId(history.channel_id||"");
-    setParticipants(presence||[]);setTasks(taskRows||[]);setDecisions(decisionRows||[]);setAttachments(attachmentRows||[]);
-  },[request,roomId,token,privateMode,privatePrincipal]);
-
-  const connect=useCallback(async()=>{
-    setError("");setBusy(true);
-    try{
-      await request("/team-room/me");
-      await request("/team-room/"+roomId+"/join",{method:"POST",body:"{}"});
-      await refresh();setConnected(true);setConnection("CONNECTING");
-    }catch(e){setError(e instanceof Error?e.message:"Connection failed");setConnected(false);}
-    finally{setBusy(false);}
-  },[request,roomId,refresh]);
-
-  useEffect(()=>{
-    if(!connected||!roomId||!token)return;
-    let stopped=false;let retry=0;let timer:number|undefined;
-    const open=async()=>{
-      try{
-        const issued=await request("/team-room/"+roomId+"/ws-ticket",{method:"POST",body:"{}"});
-        if(stopped)return;
-        const wsUrl=apiUrl.replace(/^http/,"ws").replace(/\/$/,"")+"/team-room/"+roomId+"/ws?ticket="+encodeURIComponent(issued.ticket);
-        const socket=new WebSocket(wsUrl,["team-room.v1"]);socketRef.current=socket;
-        socket.onopen=()=>{retry=0;setConnection("CONNECTED");void refresh().catch(()=>{});};
-        socket.onmessage=event=>{try{const data=JSON.parse(event.data);if(["MESSAGE_CREATED","TASK_CREATED","TASK_UPDATED","PRESENCE_CHANGED","DECISION_CREATED","ATTACHMENT_CREATED","PARTICIPANT_JOINED","PARTICIPANT_LEFT"].includes(data.type))void refresh().catch(()=>{});}catch{/* Ignore malformed event frames. */}};
-        socket.onerror=()=>setConnection("RECONNECTING");
-        socket.onclose=()=>{socketRef.current=null;if(!stopped){setConnection("RECONNECTING");const delay=Math.min(30000,500*Math.pow(2,retry++));timer=window.setTimeout(()=>void open(),delay);}};
-      }catch{if(!stopped){setConnection("RECONNECTING");timer=window.setTimeout(()=>void open(),Math.min(30000,1000*Math.pow(2,retry++)));}}
+  useEffect(() => {
+    const speechWindow = window as SpeechWindow;
+    setVoiceSupported(Boolean(speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition) && "speechSynthesis" in window);
+    return () => {
+      recognitionRef.current?.stop();
+      window.speechSynthesis?.cancel();
+      if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
     };
-    void open();
-    return()=>{stopped=true;if(timer)window.clearTimeout(timer);socketRef.current?.close();socketRef.current=null;};
-  },[connected,apiUrl,roomId,token,request,refresh]);
+  }, []);
 
-  async function sendMessage(){
-    if(!draft.trim())return;
+  const request = useCallback(async (path: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set("content-type", "application/json");
+    headers.set("authorization", "Bearer " + token);
+    const response = await fetch(apiUrl.replace(/\/$/, "") + path, { ...init, headers });
+    if (!response.ok) throw new Error("Team Room HTTP " + response.status);
+    if (response.status === 204) return null;
+    return response.json();
+  }, [apiUrl, token]);
+
+  const refresh = useCallback(async () => {
+    if (!roomId || !token) return;
+    const history = await request("/team-room/" + roomId + "/messages");
+    setMessages(history.items || []);
+  }, [request, roomId, token]);
+
+  const connect = useCallback(async () => {
     setError("");
-    try{
-      const path=privateMode?"/team-room/"+roomId+"/private/"+privatePrincipal+"/messages":"/team-room/"+roomId+"/messages";
-      await request(path,{method:"POST",body:JSON.stringify({client_message_id:crypto.randomUUID(),body:draft.trim(),parent_message_id:replyTo})});
-      setDraft("");setReplyTo(null);await refresh();
-    }catch(e){setError(e instanceof Error?e.message:"Message failed");}
-  }
-  async function createTask(){
-    try{await request("/team-room/tasks",{method:"POST",body:JSON.stringify({mission_id:missionId,title:taskTitle,checkpoint:{description:taskTitle}})});setTaskTitle("");await refresh();}
-    catch(e){setError(e instanceof Error?e.message:"Task failed");}
-  }
-  async function createDecision(){
-    try{await request("/team-room/"+roomId+"/decisions",{method:"POST",body:JSON.stringify({title:decisionTitle,decision:decisionBody,participants:[],mission_id:null,reference_message_id:null})});setDecisionTitle("");setDecisionBody("");await refresh();}
-    catch(e){setError(e instanceof Error?e.message:"Decision failed");}
-  }
-  async function createAttachmentRef(){
-    try{if(!channelId)throw new Error("Load the general channel first");await request("/team-room/"+roomId+"/attachments",{method:"POST",body:JSON.stringify({channel_id:channelId,file_name:attachmentName,storage_ref:attachmentRef})});setAttachmentName("");setAttachmentRef("");await refresh();}
-    catch(e){setError(e instanceof Error?e.message:"Attachment reference failed");}
-  }
-  async function changePresence(value:string){
-    setPresenceState(value);
-    try{await request("/team-room/"+roomId+"/presence",{method:"PUT",body:JSON.stringify({state:value})});}
-    catch(e){setError(e instanceof Error?e.message:"Presence update failed");}
-  }
-  async function openPrivate(){
-    try{const result=await request("/team-room/"+roomId+"/private/"+privatePrincipal+"/messages");setMessages(result.items||[]);setChannelId(result.channel_id);setPrivateMode(true);}
-    catch(e){setError(e instanceof Error?e.message:"Private chat unavailable");}
+    setBusy(true);
+    try {
+      await request("/team-room/me");
+      await request("/team-room/" + roomId + "/join", { method: "POST", body: "{}" });
+      await refresh();
+      setConnected(true);
+      setConnection("CONECTANDO");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Falha ao conectar");
+      setConnected(false);
+      setConnection("DESCONECTADO");
+    } finally {
+      setBusy(false);
+    }
+  }, [request, roomId, refresh]);
+
+  useEffect(() => {
+    if (!connected || !roomId || !token) return;
+    let stopped = false;
+    let retry = 0;
+    let timer: number | undefined;
+    const heartbeat = async () => {
+      try {
+        await request("/team-room/heartbeat", { method: "POST", body: "{}" });
+      } catch {
+        setConnection("SESSÃO EXPIRADA");
+        setConnected(false);
+        socketRef.current?.close();
+      }
+    };
+    void heartbeat();
+    heartbeatTimerRef.current = window.setInterval(() => void heartbeat(), 30000);
+
+    const openSocket = async () => {
+      try {
+        const issued = await request("/team-room/" + roomId + "/ws-ticket", { method: "POST", body: "{}" });
+        if (stopped) return;
+        const wsUrl = apiUrl.replace(/^http/, "ws").replace(/\/$/, "") + "/team-room/" + roomId + "/ws?ticket=" + encodeURIComponent(issued.ticket);
+        const socket = new WebSocket(wsUrl, ["team-room.v1"]);
+        socketRef.current = socket;
+        socket.onopen = () => {
+          retry = 0;
+          setConnection("CONECTADO");
+          void refresh().catch(() => {});
+        };
+        socket.onmessage = () => { void refresh().catch(() => {}); };
+        socket.onerror = () => setConnection("RECONectando");
+        socket.onclose = () => {
+          socketRef.current = null;
+          if (!stopped && autoReconnect) {
+            setConnection("RECONectando");
+            timer = window.setTimeout(() => void openSocket(), Math.min(30000, 500 * Math.pow(2, retry++)));
+          }
+        };
+      } catch {
+        if (!stopped && autoReconnect) {
+          setConnection("RECONectando");
+          timer = window.setTimeout(() => void openSocket(), Math.min(30000, 1000 * Math.pow(2, retry++)));
+        }
+      }
+    };
+    void openSocket();
+    return () => {
+      stopped = true;
+      if (heartbeatTimerRef.current) {
+        window.clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
+      }
+      if (timer) window.clearTimeout(timer);
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
+  }, [connected, apiUrl, roomId, token, autoReconnect, request, refresh]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function sendMessage() {
+    const body = draft.trim();
+    if (!body || !connected) return;
+    setError("");
+    try {
+      const clientId = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+      await request("/team-room/" + roomId + "/messages", {
+        method: "POST",
+        body: JSON.stringify({ client_message_id: clientId, body, parent_message_id: null })
+      });
+      setDraft("");
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Falha ao enviar mensagem");
+    }
   }
 
-  return <section className="team-room">
-    <div className="team-room-toolbar">
-      <label>API URL<input value={apiUrl} onChange={e=>setApiUrl(e.target.value)} /></label>
-      <label>Room ID<input value={roomId} onChange={e=>setRoomId(e.target.value)} placeholder="UUID da sala" /></label>
-      <label>Session token<input type="password" value={token} onChange={e=>setToken(e.target.value)} placeholder="Bearer token (memória da tela)" /></label>
-      <button className="primary" disabled={busy||!roomId||!token} onClick={()=>void connect()}>{busy?"Conectando...":"Entrar na sala"}</button>
-      <span className="status">{connection}</span>{connected&&<button onClick={()=>void request("/team-room/"+roomId+"/leave",{method:"POST",body:"{}"}).then(()=>{setConnected(false);setConnection("DISCONNECTED");}).catch(e=>setError(e instanceof Error?e.message:"Leave failed"))}>Sair da sala</button>}
-    </div>
-    {error&&<p className="error">{error}</p>}
-    <div className="team-room-layout">
-      <aside className="team-room-nav">
-        <strong>AI TEAM ROOM</strong><a href="#room-chat">Sala geral</a><a href="#room-tasks">Tarefas</a><a href="#room-private">Privados</a><a href="#room-audio">Áudio</a><a href="#room-decisions">Decisões</a><a href="#room-files">Arquivos</a><a href="#room-people">Participantes</a>
-        <label>Meu status<select value={presenceState} onChange={e=>void changePresence(e.target.value)}><option>ONLINE</option><option>AWAY</option><option>BUSY</option><option>WAITING</option><option>BLOCKED</option></select></label>
-      </aside>
-      <div className="team-room-main">
-        <section className="panel" id="room-chat"><div className="panel-head"><div><h2>Chat {unreadCount>0?"· "+unreadCount+" não lidas":""}</h2><p className="muted">Histórico persistente · eventos via PostgreSQL outbox + WebSocket autenticado</p></div><button onClick={()=>void refresh()}>Atualizar</button></div>
-          <div className="team-room-messages">{messages.map(m=><article key={m.message_id}><small>{m.sender_display_name} · {new Date(m.created_at).toLocaleString()}</small><p>{m.body}</p><button onClick={()=>setReplyTo(m.message_id)}>Responder nesta thread</button></article>)}</div>\n          {replyTo&&<p className="muted">Respondendo à mensagem {replyTo.slice(0,8)} <button onClick={()=>setReplyTo(null)}>Cancelar</button></p>}
-          <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={3} placeholder="Escreva uma mensagem..."/>
-          <button className="primary" onClick={()=>void sendMessage()} disabled={!connected||!draft.trim()}>Enviar mensagem</button>
-        </section>
-        <section className="panel" id="room-private"><h2>Chat privado</h2><div className="team-room-inline"><input value={privatePrincipal} onChange={e=>setPrivatePrincipal(e.target.value)} placeholder="Principal UUID do participante"/><button onClick={()=>void openPrivate()} disabled={!connected||!privatePrincipal}>Abrir conversa A ↔ B</button><button onClick={()=>{setPrivateMode(false);void refresh();}}>Voltar à sala geral</button></div><p className="muted">{privateMode?"Visualizando canal privado; o backend aplica ACL por membro.":"Escolha um participante para abrir uma conversa privada."}</p></section>
-        <section className="panel" id="room-tasks"><h2>Tarefas</h2><div className="team-room-inline"><input value={missionId} onChange={e=>setMissionId(e.target.value)} placeholder="Mission UUID"/><input value={taskTitle} onChange={e=>setTaskTitle(e.target.value)} placeholder="Descrição da tarefa"/><button onClick={()=>void createTask()} disabled={!connected||!missionId||!taskTitle}>Criar tarefa</button></div>{tasks.map(t=><div className="file-row" key={t.task_id}><strong>{t.status}</strong><span>{t.task_id.slice(0,8)} · mission {t.mission_id.slice(0,8)} · fence {t.fencing_token}</span></div>)}</section>
-        <section className="panel" id="room-decisions"><h2>Decisões</h2><input value={decisionTitle} onChange={e=>setDecisionTitle(e.target.value)} placeholder="Título"/><textarea value={decisionBody} onChange={e=>setDecisionBody(e.target.value)} rows={3} placeholder="Decisão registrada"/><button onClick={()=>void createDecision()} disabled={!connected||!decisionTitle||!decisionBody}>Registrar decisão</button>{decisions.map(d=><div className="file-row" key={d.decision_id}><strong>{d.title}</strong><span>{d.author_principal_id.slice(0,8)} · {new Date(d.created_at).toLocaleString()}</span><p>{d.decision}</p></div>)}</section>
-        <section className="panel" id="room-files"><h2>Arquivos e referências</h2><div className="team-room-inline"><input value={attachmentName} onChange={e=>setAttachmentName(e.target.value)} placeholder="Nome do arquivo"/><input value={attachmentRef} onChange={e=>setAttachmentRef(e.target.value)} placeholder="Storage reference"/><button onClick={()=>void createAttachmentRef()} disabled={!connected||!attachmentName||!attachmentRef}>Vincular referência</button></div><p className="muted">Registro de referência apenas. Upload binário/armazenamento de produção ainda não está habilitado.</p>{attachments.map(a=><div className="file-row" key={a.attachment_id}><strong>{a.file_name}</strong><span>{a.storage_ref}</span></div>)}</section>
-        <section className="panel" id="room-audio"><h2>Áudio da sala</h2><p className="muted">WEBRTC_PRODUCTION = PENDENTE. Nenhuma mídia é transmitida ou gravada.</p><div className="team-room-inline"><button disabled>Entrar no áudio</button><button disabled>Mute / Unmute</button><button disabled>Sair do áudio</button></div><small>Signaling, SFU, grants e consentimento ainda não implementados.</small></section>
-        <section className="panel" id="room-people"><h2>Participantes</h2>{participants.map(p=><div className="file-row" key={p.participant_id}><strong>{p.display_name} · {p.provider}</strong><span>{p.connected?"●":"○"} {p.state} · {p.current_task_id?"executando "+p.current_task_id.slice(0,8):"sem tarefa"}</span></div>)}</section>
+  function startDictation() {
+    const speechWindow = window as SpeechWindow;
+    const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+    if (!Recognition) {
+      setError("O navegador não oferece reconhecimento de voz. Tente usar o ditado do teclado Android.");
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.lang = "pt-BR";
+    recognition.interimResults = false;
+    recognition.onresult = event => {
+      const spoken = Array.from(event.results).map(result => result[0]?.transcript || "").join(" ");
+      setDraft(current => current ? current + " " + spoken : spoken);
+    };
+    recognition.onerror = () => {
+      setError("Não foi possível capturar o microfone. Confira a permissão do navegador.");
+      setListening(false);
+    };
+    recognition.onend = () => setListening(false);
+    recognitionRef.current = recognition;
+    setError("");
+    setListening(true);
+    try { recognition.start(); } catch {
+      setListening(false);
+      setError("O microfone não pôde ser iniciado.");
+    }
+  }
+
+  function stopDictation() {
+    recognitionRef.current?.stop();
+    setListening(false);
+  }
+
+  function speak(text: string) {
+    if (!("speechSynthesis" in window)) {
+      setError("A leitura em voz alta não está disponível neste navegador.");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "pt-BR";
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function leaveRoom() {
+    socketRef.current?.close();
+    setConnected(false);
+    setConnection("DESCONECTADO");
+  }
+
+  return (
+    <section className="team-room team-room-simple">
+      <header className="simple-room-heading">
+        <div>
+          <span className="eyebrow">COMUNICAÇÃO ENTRE AGENTES</span>
+          <h2>Sala de conversa</h2>
+          <p className="muted">Canal de texto com ditado e leitura em voz alta no navegador.</p>
+        </div>
+        <span className={connected ? "room-state room-state-on" : "room-state"}>{connection}</span>
+      </header>
+
+      <div className="simple-room-config">
+        <label>Endereço da API<input value={apiUrl} onChange={event => setApiUrl(event.target.value)} /></label>
+        <label>ID da sala<input value={roomId} onChange={event => setRoomId(event.target.value)} placeholder="UUID da sala" /></label>
+        <label>Token da sessão<input type="password" value={token} onChange={event => setToken(event.target.value)} placeholder="Token de acesso" /></label>
+        <div className="simple-room-actions">
+          <label><input type="checkbox" checked={autoReconnect} onChange={e => setAutoReconnect(e.target.checked)} /> Reconectar automaticamente</label>
+          {!connected
+            ? <button className="primary" disabled={busy || !roomId.trim() || !token.trim()} onClick={() => void connect()}>{busy ? "Conectando..." : "Conectar"}</button>
+            : <button onClick={leaveRoom}>Desconectar</button>}
+          <button onClick={() => void refresh()} disabled={!connected}>Atualizar</button>
+        </div>
       </div>
-    </div>
-  </section>;
+
+      {error && <p className="error" role="alert">{error}</p>}
+
+      <div className="simple-room-identities">
+        <div><span className="agent-dot agent-dot-gpt" /><strong>GPT-6</strong><small>Coordenador</small></div>
+        <div><span className="agent-dot agent-dot-phone" /><strong>AI-PHONE-02</strong><small>Participante esperado</small></div>
+      </div>
+
+      <div className="simple-room-messages" aria-live="polite">
+        {messages.length === 0
+          ? <div className="simple-room-empty"><strong>A conversa aparecerá aqui.</strong><p>Conecte-se a uma sala válida para carregar e enviar mensagens.</p></div>
+          : messages.map(message => (
+            <article className="simple-room-message" key={message.message_id}>
+              <div className="simple-room-message-meta">
+                <strong>{message.sender_display_name || message.sender_principal_id}</strong>
+                <time>{new Date(message.created_at).toLocaleString("pt-BR")}</time>
+              </div>
+              <p>{message.body}</p>
+              <button className="text-action" onClick={() => speak(message.body)}>🔊 Ouvir mensagem</button>
+            </article>
+          ))}
+        <div ref={messagesEndRef} />
+      </div>
+
+      <div className="simple-room-composer">
+        <label htmlFor="team-room-draft">Sua mensagem</label>
+        <textarea id="team-room-draft" value={draft} onChange={event => setDraft(event.target.value)} rows={5} placeholder="Digite uma mensagem ou use o microfone para ditar..." />
+        <div className="simple-room-compose-actions">
+          {listening
+            ? <button onClick={stopDictation}>Parar microfone</button>
+            : <button onClick={startDictation} disabled={!voiceSupported}>🎙️ Falar</button>}
+          <button onClick={() => speak(draft)} disabled={!draft.trim()}>🔊 Ouvir texto</button>
+          <button className="primary" onClick={() => void sendMessage()} disabled={!connected || !draft.trim()}>Enviar mensagem</button>
+        </div>
+        <small className="muted">{voiceSupported ? "Ditado e leitura em voz alta disponíveis conforme suporte/permissões do navegador." : "Voz nativa não detectada. O ditado do teclado Android pode ser usado no campo de texto."}</small>
+      </div>
+
+      <p className="simple-room-disclaimer">Canal persistente com texto, WebSocket, heartbeat e reconexão. A voz nesta etapa é fala→texto e texto→fala no dispositivo. O contato real GPT-6 ↔ AI-PHONE-02 só é declarado quando o processo AI-PHONE-02 estiver instalado, autenticado e conectado; a interface não simula essa identidade.</p>
+    </section>
+  );
 }

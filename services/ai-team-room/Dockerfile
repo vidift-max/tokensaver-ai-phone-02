@@ -1,4 +1,13 @@
-FROM rust:1.86-bookworm AS builder
+FROM node:22-bookworm AS web-builder
+WORKDIR /workspace
+COPY package.json package-lock.json* ./
+RUN npm install
+COPY index.html vite.config.ts tsconfig.json ./
+COPY public ./public
+COPY src ./src
+RUN npm run build
+
+FROM rust:1.100.0-bookworm AS builder
 WORKDIR /workspace
 COPY services/ai-team-room ./services/ai-team-room
 RUN cargo build --release --manifest-path services/ai-team-room/Cargo.toml
@@ -8,6 +17,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /workspace/services/ai-team-room/target/release/ai-team-room-service /usr/local/bin/ai-team-room-service
+COPY --from=web-builder /workspace/dist /app/web
+RUN useradd --system --uid 10001 --no-create-home phone02
 USER 10001:10001
 ENV TEAM_ROOM_BIND=0.0.0.0:8081
 EXPOSE 8081

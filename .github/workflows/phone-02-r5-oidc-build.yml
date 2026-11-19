@@ -2,7 +2,7 @@ name: Phone-02 R5 OIDC Credential Store and Client Credentials E2E (retry 2)
 
 on:
   push:
-    branches: [mission/phone-02-p238-b-oidc]
+    branches: [mission/phone-02-p238-b-oidc, feature/basic-chat-voice-room]
     paths:
       - 'services/phone-supervisor/oidc-r5/**'
       - 'services/phone-supervisor/phone_supervisor.cpp'

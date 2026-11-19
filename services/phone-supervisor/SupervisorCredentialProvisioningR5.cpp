@@ -92,3 +92,47 @@ bool ProvisionClientSecretThroughAdminPipe(
     return success;
 }
 }
+
+namespace phone_supervisor::r5 {
+bool ProvisionEndpointCredentialThroughAdminPipe(
+    SupervisorCredentialStore& store,const std::wstring& serviceSid,HANDLE stopEvent,HANDLE readyEvent,std::wstring& result) {
+    if(serviceSid.rfind(L"S-1-5-80-",0)!=0){result=L"ENDPOINT_PROVISION_SERVICE_SID_INVALID";return false;}
+    std::wstring sddl=L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;S-1-5-19)(A;;GA;;;"+serviceSid+L")";
+    PSECURITY_DESCRIPTOR descriptor=nullptr;
+    if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr)){result=L"ENDPOINT_PROVISION_PIPE_DACL_FAILED";return false;}
+    SECURITY_ATTRIBUTES sa{sizeof(sa),descriptor,FALSE};
+    HANDLE pipe=CreateNamedPipeW(kCredentialProvisioningPipe,PIPE_ACCESS_DUPLEX|FILE_FLAG_FIRST_PIPE_INSTANCE,
+        PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_NOWAIT|PIPE_REJECT_REMOTE_CLIENTS,1,512,512,0,&sa);
+    LocalFree(descriptor);
+    if(pipe==INVALID_HANDLE_VALUE){result=L"ENDPOINT_PROVISION_PIPE_CREATE_FAILED";return false;}
+    bool success=false;ULONGLONG deadline=GetTickCount64()+60000;
+    while(GetTickCount64()<deadline&&WaitForSingleObject(stopEvent,0)==WAIT_TIMEOUT){
+        BOOL connected=ConnectNamedPipe(pipe,nullptr);
+        DWORD connectError=connected?ERROR_SUCCESS:GetLastError();
+        if(!connected&&connectError!=ERROR_PIPE_CONNECTED&&connectError!=ERROR_PIPE_LISTENING&&connectError!=ERROR_NO_DATA){result=L"ENDPOINT_PROVISION_PIPE_CONNECT_FAILED";break;}
+        if(!connected&&(connectError==ERROR_PIPE_LISTENING||connectError==ERROR_NO_DATA)){Sleep(50);continue;}
+        if(!ImpersonateNamedPipeClient(pipe)){result=L"ENDPOINT_PROVISION_IMPERSONATION_FAILED";DisconnectNamedPipe(pipe);break;}
+        bool authorized=IsAdminOrSystemClient();BOOL reverted=RevertToSelf();
+        if(!reverted){result=L"ENDPOINT_PROVISION_REVERT_FAILED";DisconnectNamedPipe(pipe);break;}
+        if(!authorized){result=L"ENDPOINT_PROVISION_CALLER_NOT_ADMIN";DisconnectNamedPipe(pipe);break;}
+        BYTE magic[4]{},lengthBytes[4]{},credentialBytes[256]{};
+        bool readOk=ReadExact(pipe,magic,4,stopEvent)&&ReadExact(pipe,lengthBytes,4,stopEvent);
+        DWORD length=0;if(readOk)std::memcpy(&length,lengthBytes,sizeof(length));
+        if(!readOk||std::memcmp(magic,"TSE5",4)!=0||length<32||length>sizeof(credentialBytes)) {
+            result=L"ENDPOINT_PROVISION_MESSAGE_INVALID";
+        } else if(!ReadExact(pipe,credentialBytes,length,stopEvent)) {
+            result=L"ENDPOINT_PROVISION_SECRET_READ_FAILED";
+        } else {
+            SecureBuffer credential;
+            if(!credential.Assign(credentialBytes,length)) result=L"ENDPOINT_PROVISION_SECURE_BUFFER_FAILED";
+            else if(store.WriteEndpointCredential(credential,result)) {result=L"ENDPOINT_CREDENTIAL_PROVISIONED=PASS";success=true;SetEvent(readyEvent);}
+            credential.Clear();
+        }
+        SecureZeroMemory(credentialBytes,sizeof(credentialBytes));
+        DWORD ack=success?0:1,written=0;WriteFile(pipe,&ack,sizeof(ack),&written,nullptr);FlushFileBuffers(pipe);
+        DisconnectNamedPipe(pipe);break;
+    }
+    if(!success&&result.empty())result=L"ENDPOINT_PROVISION_PIPE_TIMEOUT";
+    CloseHandle(pipe);return success;
+}
+} // namespace phone_supervisor::r5

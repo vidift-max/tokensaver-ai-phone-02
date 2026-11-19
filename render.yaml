@@ -1,0 +1,167 @@
+services:
+  - type: web
+    name: ai-phone-02-team-room
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/ai-team-room/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/live
+    envVars:
+      - key: TEAM_ROOM_BIND
+        value: 0.0.0.0:10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-phone-02-postgres
+          property: connectionString
+      - key: OIDC_ISSUER_BASE_URL
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: OIDC_AUDIENCE
+        value: team-room-api
+      - key: TEAM_ROOM_REQUIRE_OIDC
+        value: "true"
+
+
+  - type: web
+    name: ai-phone-02-keycloak
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/keycloak/Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: KC_DB
+        value: postgres
+      - key: KC_DB_URL
+        fromDatabase:
+          name: ai-phone-02-postgres
+          property: connectionString
+      - key: KC_HOSTNAME
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: KC_HTTP_ENABLED
+        value: "true"
+      - key: KC_HTTP_PORT
+        value: "10000"
+      - key: KC_CACHE
+        value: local
+      - key: JAVA_OPTS_KC_HEAP
+        value: "-Xms64m -Xmx192m -XX:MaxMetaspaceSize=96m -XX:CompressedClassSpaceSize=32m"
+      - key: KC_BOOTSTRAP_ADMIN_USERNAME
+        value: phone02-admin
+      - key: KC_BOOTSTRAP_ADMIN_PASSWORD
+        generateValue: true
+
+  - type: web
+    name: ai-phone-02-provisioner
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/ai-phone-02-provisioner/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/live
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-phone-02-postgres
+          property: connectionString
+      - key: KEYCLOAK_URL
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: KEYCLOAK_ADMIN_PASSWORD
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: KC_BOOTSTRAP_ADMIN_PASSWORD
+      - key: PHONE02_CLIENT_SECRET
+        generateValue: true
+      - key: PHONE02_ENDPOINT_CREDENTIAL
+        generateValue: true
+      - key: TEAM_ROOM_ROOM_ID
+        value: 9606a885-6f4a-4785-9529-2476ee41c2c1
+      - key: AI_PHONE_ID
+        value: 3bff9274-69b8-4b03-b14e-2b7935c3e366
+      - key: PHONE02_TENANT_ID
+        value: 2d1abfe1-c865-4f8a-86db-d62cb412c28d
+      - key: PHONE02_ENDPOINT_ID
+        value: fd4b56d2-b601-499d-957e-097902d0e183
+
+  - type: web
+    name: ai-phone-02-agent
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/ai-phone-02-agent/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/live
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_PHONE_EXECUTOR_TOKEN
+        generateValue: true
+      - key: AI_PHONE_MODEL
+        value: gpt-6-luna
+      - key: AI_PHONE_SYSTEM_PROMPT
+        sync: false
+
+  # Render Free does not support Background Worker instances.
+  # The worker is therefore exposed as a Web Service so it can run the
+  # same persistent polling loop while the service is awake.
+  - type: web
+    name: ai-phone-02-worker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./services/ai-phone-02-worker/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/live
+    envVars:
+      - key: AI_PHONE_API_URL
+        fromService:
+          name: ai-phone-02-team-room
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AI_PHONE_OIDC_ISSUER
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AI_PHONE_OIDC_CLIENT_ID
+        value: ai-phone-02-runtime
+      - key: AI_PHONE_OIDC_CLIENT_SECRET
+        fromService:
+          name: ai-phone-02-provisioner
+          type: web
+          envVarKey: PHONE02_CLIENT_SECRET
+      - key: AI_PHONE_ENDPOINT_CREDENTIAL
+        fromService:
+          name: ai-phone-02-provisioner
+          type: web
+          envVarKey: PHONE02_ENDPOINT_CREDENTIAL
+      - key: AI_PHONE_ID
+        value: 3bff9274-69b8-4b03-b14e-2b7935c3e366
+      - key: PHONE02_ENDPOINT_ID
+        value: fd4b56d2-b601-499d-957e-097902d0e183
+      - key: TEAM_ROOM_ROOM_ID
+        value: 9606a885-6f4a-4785-9529-2476ee41c2c1
+      - key: AI_PHONE_EXECUTOR_URL
+        fromService:
+          name: ai-phone-02-agent
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AI_PHONE_EXECUTOR_TOKEN
+        fromService:
+          name: ai-phone-02-agent
+          type: web
+          envVarKey: AI_PHONE_EXECUTOR_TOKEN
+      - key: AI_PHONE_POLL_MS
+        value: "2000"
+      - key: AI_PHONE_HEARTBEAT_MS
+        value: "30000"
+
+databases:
+  - name: ai-phone-02-postgres
+    plan: free

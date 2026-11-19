@@ -29,13 +29,18 @@ public:
     SupervisorCredentialStore(std::wstring root, std::wstring serviceSid);
     bool Initialize(std::wstring& reason);
     bool WriteClientSecret(const SecureBuffer& secret, std::wstring& reason);
+    bool WriteEndpointCredential(const SecureBuffer& credential, std::wstring& reason);
     bool ReadClientSecret(SecureBuffer& secret, std::wstring& reason) const;
+    bool ReadEndpointCredential(SecureBuffer& credential, std::wstring& reason) const;
     bool RemoveClientSecret(std::wstring& reason) const;
+    bool RemoveEndpointCredential(std::wstring& reason) const;
+    bool EndpointCredentialExists() const;
     bool Exists() const;
     const std::wstring& Path() const noexcept { return filePath_; }
 private:
     std::wstring root_;
     std::wstring filePath_;
+    std::wstring endpointCredentialPath_;
     std::wstring serviceSid_;
     bool ApplyProtectedDacl(const std::wstring& path, bool directory, std::wstring& reason) const;
     bool VerifyProtectedDacl(const std::wstring& path, std::wstring& reason) const;
