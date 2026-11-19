@@ -365,7 +365,7 @@ async fn verify_oidc_token(config: &OidcConfig, token: &str) -> Result<OidcClaim
         Value::String(value) => value == &config.audience,
         Value::Array(values) => values
             .iter()
-            .any(|value| value.as_str() == Some(config.audience.as_str()))
+            .any(|value| value.as_str() == Some(config.audience.as_str())),
         _ => false,
     };
     if claims.iss != config.issuer
