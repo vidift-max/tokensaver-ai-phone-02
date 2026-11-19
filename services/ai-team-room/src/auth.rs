@@ -502,6 +502,34 @@ pub async fn exchange_workload_token(
     .execute(&mut *tx)
     .await?;
 
+    // Preserve the separately enrolled endpoint across a legitimate OIDC
+    // session rotation. The endpoint credential and fence remain unchanged;
+    // only the expired/revoked session and execution binding are replaced.
+    // Restrict this to an ACTIVE endpoint with its matching ACTIVE credential.
+    sqlx::query(
+        r#"UPDATE phone_attachments a
+           SET session_id=$1, execution_id=$2
+           WHERE a.tenant_id=$3 AND a.room_id=$4 AND a.principal_id=$5
+             AND a.attachment_status='ACTIVE'
+             AND EXISTS (
+               SELECT 1 FROM sessions old
+               WHERE old.session_id=a.session_id AND old.tenant_id=$3
+                 AND old.principal_id=$5
+                 AND (old.status <> 'ACTIVE' OR old.revoked_at IS NOT NULL OR old.expires_at <= NOW())
+             )
+             AND EXISTS (
+               SELECT 1 FROM phone_endpoints e
+               JOIN phone_endpoint_credentials c ON c.endpoint_id=e.endpoint_id
+                 AND c.ai_phone_id=e.ai_phone_id AND c.tenant_id=e.tenant_id AND c.ai_id=e.ai_id
+               WHERE e.endpoint_id=a.endpoint_id AND e.endpoint_status='ATTACHED'
+                 AND c.credential_status='ACTIVE' AND c.expires_at>NOW()
+                 AND c.endpoint_fence=a.endpoint_fence
+                 AND a.endpoint_fence=(SELECT endpoint_fence FROM ai_phones p WHERE p.ai_phone_id=a.ai_phone_id)
+             )"#
+    ).bind(session_id).bind(execution_id).bind(registered.tenant_id)
+      .bind(room_id).bind(registered.principal_id)
+      .execute(&mut *tx).await?;
+
     sqlx::query("UPDATE workload_identities SET last_seen_at = NOW() WHERE workload_id = $1")
         .bind(registered.workload_id)
         .execute(&mut *tx)
