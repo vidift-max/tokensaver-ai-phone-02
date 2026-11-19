@@ -478,9 +478,9 @@ static void WINAPI ServiceMain(DWORD,LPWSTR*){
  {std::lock_guard<std::mutex>l(gMutex);for(auto&kv:gSessions)SecureZeroMemory(kv.second.nonceHash.data(),kv.second.nonceHash.size());gSessions.clear();}
  if(gR5TestMode){
   gOidcAccessToken.Clear();gEndpointCredential.Clear();if(gRealTeamRoomAdapter){gRealTeamRoomAdapter->Clear();gRealTeamRoomAdapter.reset();}Log(L"TOKEN_MEMORY_ZEROED=PASS");
-  std::wstring removeReason;bool removed=r5Store&&r5Store->RemoveClientSecret(removeReason);
-  Log(std::wstring(L"CREDENTIAL_REMOVE=")+(removed?L"PASS":L"FAIL"));
-  bool clean=removed&&gOidcAccessToken.empty()&&(!r5Store||!r5Store->Exists());
+  std::wstring removeReason;bool removed=r5Store&&r5Store->RemoveClientSecret(removeReason);std::wstring endpointRemoveReason;bool endpointRemoved=!gEndpointCredentialRequired||(r5Store&&r5Store->RemoveEndpointCredential(endpointRemoveReason));
+  Log(std::wstring(L"CREDENTIAL_REMOVE=")+(removed?L"PASS":L"FAIL"));Log(std::wstring(L"ENDPOINT_CREDENTIAL_REMOVE=")+(endpointRemoved?L"PASS":L"FAIL"));
+  bool clean=removed&&endpointRemoved&&gOidcAccessToken.empty()&&gEndpointCredential.empty()&&(!r5Store||(!r5Store->Exists()&&!r5Store->EndpointCredentialExists()));
   Log(std::wstring(L"CLEANUP=")+(clean?L"PASS":L"FAIL"));
   gR5CredentialLoaded=false;
  }
