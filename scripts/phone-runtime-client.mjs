@@ -97,6 +97,11 @@ export class PhoneRuntimeClient {
     return payload;
   }
 
+  async joinRoom() {
+    if (!this.roomId) throw new PhoneRuntimeError("TEAM_ROOM_ROOM_ID is required", 0, "CONFIG_REQUIRED");
+    return this.request("POST", "/team-room/" + encodeURIComponent(this.roomId) + "/join");
+  }
+
   async attach() {
     if (!this.endpointId) throw new PhoneRuntimeError("PHONE02_ENDPOINT_ID is required", 0, "CONFIG_REQUIRED");
     return this.request("POST", "/ai-phone/attach", {endpoint_id:this.endpointId,endpoint_type:"WORKER",metadata:{label:"AI-PHONE-02 independent runtime"}});
