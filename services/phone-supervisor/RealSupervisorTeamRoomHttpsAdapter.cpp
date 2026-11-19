@@ -506,6 +506,26 @@ bool RealSupervisorTeamRoomHttpsAdapter::parseUuidField(
     return ExtractJsonString(json, key, out) && ParseUuid(out);
 }
 
+bool ParseUInt64Field(const std::string& json, const std::string& key, std::uint64_t& out) {
+    const std::string needle = "\"" + key + "\"";
+    const size_t keyPos = json.find(needle);
+    if (keyPos == std::string::npos) return false;
+    const size_t colon = json.find(':', keyPos + needle.size());
+    if (colon == std::string::npos) return false;
+    size_t pos = colon + 1;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' ||
+                                 json[pos] == '\r' || json[pos] == '\n')) ++pos;
+    size_t end = pos;
+    while (end < json.size() && json[end] >= '0' && json[end] <= '9') ++end;
+    if (end == pos) return false;
+    try {
+        out = std::stoull(json.substr(pos, end - pos));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool RealSupervisorTeamRoomHttpsAdapter::parsePhoneId(
     const std::string& json, std::string& out) const {
     const size_t phonePos = json.find("\"phone\"");
@@ -657,17 +677,11 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
 
     std::string attachmentId;
     std::string attachedEndpoint;
-    std::string fenceText;
+    std::uint64_t serverFence = 0;
     if (!parseUuidField(phoneAttachment, "attachment_id", attachmentId) ||
         !parseUuidField(phoneAttachment, "endpoint_id", attachedEndpoint) ||
-        !parseStringField(phoneAttachment, "endpoint_fence", fenceText) ||
+        !ParseUInt64Field(phoneAttachment, "endpoint_fence", serverFence) ||
         attachedEndpoint != binding.endpoint_id) {
-        return false;
-    }
-    std::uint64_t serverFence = 0;
-    try {
-        serverFence = std::stoull(fenceText);
-    } catch (...) {
         return false;
     }
 
