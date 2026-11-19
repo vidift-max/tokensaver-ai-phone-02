@@ -97,3 +97,12 @@ No secret should be pasted into GitHub, source code, chat, or logs.
 Until the hosted runtime is actually deployed and an authenticated Phone-02 endpoint returns a real response, the status remains BLOCKED_EXTERNAL_RUNTIME.
 
 The repository is not allowed to convert this into PASS based on UI labels, local speech synthesis, or static configuration.
+
+
+## Render Hobby/free-tier adaptation
+
+Render's current Hobby/free infrastructure has two relevant limits: only one active Free Postgres database is allowed per workspace, and Background Worker instances do not have a Free compute plan. The Blueprint therefore uses a separate Hobby workspace for AI-PHONE-02 and exposes the Phone-02 polling worker as a Free Web Service with HTTP health endpoints. This preserves the worker code path without requiring a paid worker.
+
+The Free Web Service can spin down after 15 minutes without inbound traffic. Therefore this is a tablet-first test/preview deployment, not a production always-on guarantee. A production always-on Phone-02 worker will require paid compute or another always-on execution provider.
+
+The user must not delete or repurpose the existing Blogger Postgres database merely to satisfy the Phone-02 deployment.
