@@ -49,21 +49,17 @@ async function refreshBinding() {
       await client.exchangeOidcSession();
       await client.joinRoom();
     }
-    let snapshot;
-    try {
-      snapshot = await client.getSnapshot();
-    } catch (error) {
-      if (error.code !== "AUTHORIZATION_LOST" || !client.oidcIssuer) throw error;
-      await client.exchangeOidcSession();
-      snapshot = await client.getSnapshot();
+    // A fresh session invalidates the previous attachment's session binding.
+    // Re-attaching first lets the API safely fence the old generation and bind
+    // the pre-enrolled endpoint credential to this session before snapshot read.
+    const attachment = await client.attach();
+    endpointFence = attachment?.endpoint_fence;
+    const snapshot = await client.getSnapshot();
+    if (!Number.isInteger(endpointFence)) endpointFence = snapshot?.attachment?.endpoint_fence;
+    if (!Number.isInteger(endpointFence) ||
+        snapshot?.attachment?.endpoint_fence !== endpointFence) {
+      throw new Error("Phone-02 endpoint is not currently attached to the active session");
     }
-    endpointFence = snapshot?.attachment?.endpoint_fence;
-    if (!Number.isInteger(endpointFence)) {
-      await client.attach();
-      snapshot = await client.getSnapshot();
-      endpointFence = snapshot?.attachment?.endpoint_fence;
-    }
-    if (!Number.isInteger(endpointFence)) throw new Error("Phone-02 endpoint is not currently attached");
     nextBindingRetryAt = 0;
   } catch (error) {
     nextBindingRetryAt = Date.now() + (error.status === 429 ? 60000 : 15000);
@@ -75,7 +71,13 @@ async function ensureHeartbeat(force = false) {
   if (!configurationReady()) return;
   requireRuntimeConfig();
   const now = Date.now();
-  if (!force && now - lastHeartbeat < heartbeatEvery) return;
+  if (client.sessionToken && client.shouldRenewSession?.(now)) {
+    client.sessionToken = "";
+    client.sessionExpiresAt = 0;
+    endpointFence = null;
+    lastHeartbeat = 0;
+  }
+  if (!force && now - lastHeartbeat < heartbeatEvery && Number.isInteger(endpointFence)) return;
   if (!Number.isInteger(endpointFence)) await refreshBinding();
   await client.heartbeat(endpointFence);
   lastHeartbeat = now;
