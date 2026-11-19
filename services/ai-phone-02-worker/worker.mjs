@@ -137,7 +137,7 @@ async function guardedTick() {
       client.sessionToken = "";
       endpointFence = null;
       lastHeartbeat = 0;
-      nextBindingRetryAt = Date.now() + 1000;
+      nextBindingRetryAt = Date.now() + 15000;
       return;
     }
     if (["OIDC_AUTH_FAILED","OIDC_EXCHANGE_FAILED","OIDC_RETRY_BACKOFF"].includes(error.code)) return;
