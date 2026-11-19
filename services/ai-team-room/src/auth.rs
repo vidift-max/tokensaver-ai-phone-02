@@ -42,7 +42,14 @@ fn is_loopback_http_url(value: &str) -> bool {
 
 impl OidcConfig {
     pub fn from_env() -> Result<Self, String> {
-        let issuer = std::env::var("OIDC_ISSUER").map_err(|_| "OIDC_ISSUER is required")?;
+        let issuer = match std::env::var("OIDC_ISSUER") {
+            Ok(value) if !value.trim().is_empty() => value,
+            _ => {
+                let base = std::env::var("OIDC_ISSUER_BASE_URL")
+                    .map_err(|_| "OIDC_ISSUER or OIDC_ISSUER_BASE_URL is required")?;
+                format!("{}/realms/team-room", base.trim_end_matches("/"))
+            }
+        };
         let audience = std::env::var("OIDC_AUDIENCE").map_err(|_| "OIDC_AUDIENCE is required")?;
         let expected_jwks_url = std::env::var("OIDC_JWKS_URL").ok();
         let allow_http_localhost =
