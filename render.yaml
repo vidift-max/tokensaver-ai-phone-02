@@ -38,8 +38,6 @@ services:
         fromDatabase:
           name: ai-phone-02-postgres
           property: connectionString
-      - key: KC_DB_SCHEMA
-        value: keycloak
       - key: KC_HOSTNAME
         fromService:
           name: ai-phone-02-keycloak
