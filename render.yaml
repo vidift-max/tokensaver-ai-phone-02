@@ -13,12 +13,15 @@ services:
         fromDatabase:
           name: ai-phone-02-postgres
           property: connectionString
-      - key: OIDC_ISSUER
-        sync: false
+      - key: OIDC_ISSUER_BASE_URL
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
       - key: OIDC_AUDIENCE
-        sync: false
+        value: team-room-api
       - key: OIDC_JWKS_URL
-        sync: false
+        value: ""
       - key: TEAM_ROOM_REQUIRE_OIDC
         value: "true"
 
@@ -117,17 +120,41 @@ services:
     healthCheckPath: /health/live
     envVars:
       - key: AI_PHONE_API_URL
-        sync: false
-      - key: AI_PHONE_SESSION_TOKEN
-        sync: false
+        fromService:
+          name: ai-phone-02-team-room
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AI_PHONE_OIDC_ISSUER
+        fromService:
+          name: ai-phone-02-keycloak
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: AI_PHONE_OIDC_CLIENT_ID
+        value: ai-phone-02-runtime
+      - key: AI_PHONE_OIDC_CLIENT_SECRET
+        fromService:
+          name: ai-phone-02-provisioner
+          type: web
+          envVarKey: PHONE02_CLIENT_SECRET
       - key: AI_PHONE_ENDPOINT_CREDENTIAL
-        sync: false
+        fromService:
+          name: ai-phone-02-provisioner
+          type: web
+          envVarKey: PHONE02_ENDPOINT_CREDENTIAL
       - key: AI_PHONE_ID
-        sync: false
+        value: 3bff9274-69b8-4b03-b14e-2b7935c3e366
+      - key: TEAM_ROOM_ROOM_ID
+        value: 9606a885-6f4a-4785-9529-2476ee41c2c1
       - key: AI_PHONE_EXECUTOR_URL
-        sync: false
+        fromService:
+          name: ai-phone-02-agent
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
       - key: AI_PHONE_EXECUTOR_TOKEN
-        sync: false
+        fromService:
+          name: ai-phone-02-agent
+          type: web
+          envVarKey: AI_PHONE_EXECUTOR_TOKEN
       - key: AI_PHONE_POLL_MS
         value: "2000"
       - key: AI_PHONE_HEARTBEAT_MS
