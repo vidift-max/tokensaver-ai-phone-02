@@ -51,7 +51,7 @@ async function setupDb(subject){
  await c.query("INSERT INTO phone_endpoints(endpoint_id,ai_phone_id,endpoint_type,endpoint_status,metadata) VALUES($1,$2,'WORKER','REGISTERED',$3) ON CONFLICT DO NOTHING",[endpoint,phone,JSON.stringify({label:'AI-PHONE-02 independent runtime'})]);
  const hash=crypto.createHash('sha256').update(e.PHONE02_ENDPOINT_CREDENTIAL).digest();
  await c.query("INSERT INTO phone_endpoint_credentials(credential_id,endpoint_id,ai_phone_id,tenant_id,ai_id,credential_hash,endpoint_fence,expires_at) VALUES($1,$2,$3,$4,$5,$6,NULL,NOW()+INTERVAL '365 days') ON CONFLICT DO NOTHING",[crypto.randomUUID(),endpoint,phone,tenant,ai,hash]);
- for(const p of ['phone.read','phone.attach','phone.detach','phone.heartbeat','phone.message.read','phone.message.send','phone.message.ack']) await c.query('INSERT INTO principal_permissions(permission_id,tenant_id,principal_id,room_id,permission) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',[crypto.randomUUID(),tenant,principal,room,p]);
+ for(const p of ['room.join','room.read','phone.read','phone.attach','phone.detach','phone.heartbeat','phone.message.read','phone.message.send','phone.message.ack']) await c.query('INSERT INTO principal_permissions(permission_id,tenant_id,principal_id,room_id,permission) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',[crypto.randomUUID(),tenant,principal,room,p]);
  await c.query('COMMIT');console.log(JSON.stringify({status:'provisioned',issuer,phone_id:phone,endpoint_id:endpoint,room_id:room,principal_id:principal,subject}));
  }catch(x){await c.query('ROLLBACK');throw x}finally{c.release();await pool.end()}
 }
