@@ -347,7 +347,7 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
   phone_supervisor::FakeSupervisorTeamRoomAdapter adapter;
   if(adapter.authenticate("INVALID-ASSERTION")){*status=RPC_INTERNAL_ERROR;return;}Log(L"TEAM_ROOM_FAKE_AUTH_FAILURE=PASS");
   if(!adapter.authenticate("P2.37-TEST-ONLY-ASSERTION")){*status=RPC_INTERNAL_ERROR;return;}Log(L"TEAM_ROOM_FAKE_AUTHENTICATE=PASS");
-  phone_supervisor::ProvisionedPhoneBinding provisioned{phoneId,endpointId,Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),1};
+  phone_supervisor::ProvisionedPhoneBinding provisioned{phoneId,endpointId,Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),"",1};
   auto wrong=provisioned;wrong.ai_phone_id="CLIENT-CHOSEN-IDENTITY";
   phone_supervisor::TeamRoomAttachment attachment;
   if(adapter.attach(wrong,attachment)){*status=RPC_INTERNAL_ERROR;return;}Log(L"TEAM_ROOM_FAKE_IDENTITY_MISMATCH=PASS");
