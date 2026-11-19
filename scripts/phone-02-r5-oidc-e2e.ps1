@@ -113,7 +113,7 @@ function Find-Bytes([byte[]]$haystack,[byte[]]$needle){
  return $false
 }
 try{
- Mark 'EXPLICIT_BRANCH_GUARD' ($env:GITHUB_REF -eq 'refs/heads/mission/phone-02-p238-b-oidc')
+ Mark 'EXPLICIT_BRANCH_GUARD' ($env:GITHUB_REF -eq 'refs/heads/mission/phone-02-p238-b-oidc' -or $env:GITHUB_REF -eq 'refs/heads/feature/basic-chat-voice-room')
  Mark 'WINDOWS_X64_RUNNER' ($env:RUNNER_OS -eq 'Windows' -and $env:RUNNER_ARCH -eq 'X64')
  Mark 'BUILD_OUTPUTS_PRESENT' ((Test-Path $SupervisorExe) -and (Test-Path $OidcDll) -and (Test-Path $ClientExe))
  Mark 'R5_STORE_PATH_FRESH' (-not(Test-Path $storeRoot))
