@@ -5,6 +5,8 @@
 namespace phone_supervisor {
 struct ProvisionedPhoneBinding {
  std::string ai_phone_id, endpoint_id, package_family, package_full_name, appcontainer_sid;
+ // Protected endpoint credential, held only in Supervisor memory after privileged provisioning.
+ std::string endpoint_credential;
  std::uint64_t install_generation = 0;
 };
 struct TeamRoomAttachment { std::string attachment_id, sender_ai_phone_id, team_room_session_id, execution_id, endpoint_id; std::uint64_t endpoint_fence = 0; };
