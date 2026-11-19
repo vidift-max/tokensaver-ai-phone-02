@@ -47,8 +47,8 @@ async function setupDb(subject){
  const ai=(await c.query("SELECT ai_id FROM ai_identities WHERE identity_key='ai-phone-02:external'")).rows[0].ai_id;
  await c.query('INSERT INTO ai_identity_principals(ai_id,tenant_id,principal_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[ai,tenant,principal]);
  await c.query('INSERT INTO ai_identity_tenants(ai_id,tenant_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[ai,tenant]);
- await c.query("INSERT INTO ai_phones(ai_phone_id,ai_id,phone_status) VALUES($1,$2,'DISCONNECTED') ON CONFLICT DO NOTHING",[phone,ai]);
- await c.query("INSERT INTO phone_endpoints(endpoint_id,ai_phone_id,endpoint_type,endpoint_status,metadata) VALUES($1,$2,'WORKER','REGISTERED',$3) ON CONFLICT DO NOTHING",[endpoint,phone,JSON.stringify({label:'AI-PHONE-02 independent runtime'})]);
+ await c.query("INSERT INTO ai_phones(ai_phone_id,ai_id,tenant_id,phone_status) VALUES($1,$2,$3,'DISCONNECTED') ON CONFLICT DO NOTHING",[phone,ai,tenant]);
+ await c.query("INSERT INTO phone_endpoints(endpoint_id,ai_phone_id,tenant_id,ai_id,endpoint_type,endpoint_status,metadata) VALUES($1,$2,$3,$4,'WORKER','REGISTERED',$5) ON CONFLICT DO NOTHING",[endpoint,phone,tenant,ai,JSON.stringify({label:'AI-PHONE-02 independent runtime'})]);
  const hash=crypto.createHash('sha256').update(e.PHONE02_ENDPOINT_CREDENTIAL).digest();
  await c.query("INSERT INTO phone_endpoint_credentials(credential_id,endpoint_id,ai_phone_id,tenant_id,ai_id,credential_hash,endpoint_fence,expires_at) VALUES($1,$2,$3,$4,$5,$6,NULL,NOW()+INTERVAL '365 days') ON CONFLICT DO NOTHING",[crypto.randomUUID(),endpoint,phone,tenant,ai,hash]);
  for(const p of ['room.join','room.read','phone.read','phone.attach','phone.detach','phone.heartbeat','phone.message.read','phone.message.send','phone.message.ack']) await c.query('INSERT INTO principal_permissions(permission_id,tenant_id,principal_id,room_id,permission) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',[crypto.randomUUID(),tenant,principal,room,p]);
