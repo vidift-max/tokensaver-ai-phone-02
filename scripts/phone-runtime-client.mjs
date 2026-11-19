@@ -16,7 +16,7 @@ export class PhoneRuntimeClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
     this.baseUrl = (env.AI_PHONE_API_URL || "").replace(/\/+$/, "");
     this.sessionToken = env.AI_PHONE_SESSION_TOKEN || "";
-    this.oidcIssuer = (env.AI_PHONE_OIDC_ISSUER || "").replace(/\\/+$/, "");
+    this.oidcIssuer = (env.AI_PHONE_OIDC_ISSUER || "").replace(/\/+$/, "");
     this.oidcClientId = env.AI_PHONE_OIDC_CLIENT_ID || "";
     this.oidcClientSecret = env.AI_PHONE_OIDC_CLIENT_SECRET || "";
     this.roomId = env.TEAM_ROOM_ROOM_ID || "";
