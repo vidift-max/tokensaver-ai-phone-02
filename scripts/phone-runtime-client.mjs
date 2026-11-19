@@ -132,6 +132,10 @@ export class PhoneRuntimeClient {
     return this.request("POST", "/ai-phone/heartbeat", { endpoint_fence: endpointFence });
   }
 
+  async heartbeatRoom() {
+    return this.request("POST", "/team-room/heartbeat");
+  }
+
   async poll() {
     const messages = await this.request("GET", `/ai-phone/${encodeURIComponent(this.phoneId)}/messages`);
     if (!Array.isArray(messages)) {
