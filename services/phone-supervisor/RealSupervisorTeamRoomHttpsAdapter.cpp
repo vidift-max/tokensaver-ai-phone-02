@@ -581,7 +581,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::authenticate(
     std::string response;
     DWORD status = 0;
     std::wstring reason;
-    if (!request(L"POST", L"/auth/exchange", body, response, status, reason) ||
+    if (!request(L"POST", L"/auth/exchange", body, response, nullptr, status, reason) ||
         status != 200) {
         return false;
     }
@@ -625,7 +625,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     std::string me;
     DWORD status = 0;
     std::wstring reason;
-    if (!request(L"GET", L"/auth/me", "", me, status, reason) || status != 200) {
+    if (!request(L"GET", L"/auth/me", "", me, nullptr, status, reason) || status != 200) {
         return false;
     }
 
@@ -644,7 +644,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     }
 
     std::string phoneSnapshot;
-    if (!request(L"GET", L"/ai-phone/me", "", phoneSnapshot, status, reason) ||
+    if (!request(L"GET", L"/ai-phone/me", "", phoneSnapshot, nullptr, status, reason) ||
         status != 200) {
         return false;
     }
@@ -687,7 +687,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     std::string joined;
     if (!request(
             L"POST", L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/join",
-            "", joined, status, reason) ||
+            "", joined, nullptr, status, reason) ||
         status != 200) {
         return false;
     }
@@ -722,7 +722,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
         return false;
     }
     if (!request(L"POST", L"/team-room/heartbeat", "", response,
-                 status, reason) ||
+                 nullptr, status, reason) ||
         status != 200) {
         return false;
     }
@@ -784,7 +784,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::detach(
         status != 204) {
         return false;
     }
-    if (!request(L"POST", path, "", response, status, reason) || status != 204) {
+    if (!request(L"POST", path, "", response, nullptr, status, reason) || status != 204) {
         return false;
     }
     attachment_ = {};
@@ -825,7 +825,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::send(
     std::wstring reason;
     const std::wstring path =
         L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/messages";
-    if (!request(L"POST", path, body, response, status, reason) ||
+    if (!request(L"POST", path, body, response, nullptr, status, reason) ||
         (status != 200 && status != 201)) {
         return false;
     }
@@ -852,7 +852,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::receive(
     std::wstring reason;
     const std::wstring path =
         L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/messages?limit=50";
-    if (!request(L"GET", path, "", response, status, reason) || status != 200) {
+    if (!request(L"GET", path, "", response, nullptr, status, reason) || status != 200) {
         return false;
     }
 
@@ -898,7 +898,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::revoke(
     std::string response;
     DWORD status = 0;
     std::wstring reason;
-    if (!request(L"POST", L"/auth/logout", "", response, status, reason) ||
+    if (!request(L"POST", L"/auth/logout", "", response, nullptr, status, reason) ||
         status != 204) {
         return false;
     }
