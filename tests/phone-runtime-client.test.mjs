@@ -8,7 +8,8 @@ const config = {
   AI_PHONE_API_URL: "https://phone.example.test",
   AI_PHONE_SESSION_TOKEN: "session-secret",
   AI_PHONE_ENDPOINT_CREDENTIAL: "x".repeat(48),
-  AI_PHONE_ID: phoneId
+  AI_PHONE_ID: phoneId,
+  PHONE02_ENDPOINT_ID: "30000000-0000-4000-8000-000000000003"
 };
 function response(status, payload) {
   return { ok: status >= 200 && status < 300, status, text: async () => payload === null ? "" : JSON.stringify(payload) };
