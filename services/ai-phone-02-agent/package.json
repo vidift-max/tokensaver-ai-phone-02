@@ -1,0 +1,1 @@
+{"name":"ai-phone-02-agent","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test tests/server.test.mjs"},"dependencies":{"openai":"^6.0.0"}}
