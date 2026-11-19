@@ -49,6 +49,10 @@ services:
         value: "true"
       - key: KC_HTTP_PORT
         value: "10000"
+      - key: KC_CACHE
+        value: local
+      - key: JAVA_OPTS_KC_HEAP
+        value: "-XX:MaxRAMPercentage=35 -XX:InitialRAMPercentage=10"
       - key: KC_BOOTSTRAP_ADMIN_USERNAME
         value: phone02-admin
       - key: KC_BOOTSTRAP_ADMIN_PASSWORD
