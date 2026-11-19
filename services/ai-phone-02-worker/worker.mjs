@@ -4,14 +4,14 @@ import { RemoteAiExecutor } from "./scripts/remote-ai-executor.mjs";
 
 let client = null;
 let executor = null;
-const recipient = process.env.AI_PHONE_REPLY_TO_ID || "";
+
 
 function requireRuntimeConfig() {
   if (!client) client = new PhoneRuntimeClient();
   if (!executor) executor = new RemoteAiExecutor();
 }
 function configurationReady() {
-  return Boolean(recipient);
+  return true;
 }
 
 const seen = new Set();
@@ -85,7 +85,10 @@ async function tick() {
         }
       });
 
-      await client.send(recipient, "reply-" + message.message_id, result.content);
+      if (typeof message.sender_ai_phone_id !== "string" || !message.sender_ai_phone_id) {
+        throw new Error("incoming message has no sender_ai_phone_id");
+      }
+      await client.send(message.sender_ai_phone_id, "reply-" + message.message_id, result.content);
       await client.acknowledge(message.message_id);
       seen.add(message.message_id);
     }
