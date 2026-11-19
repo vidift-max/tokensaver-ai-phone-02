@@ -20,8 +20,6 @@ services:
           envVarKey: RENDER_EXTERNAL_URL
       - key: OIDC_AUDIENCE
         value: team-room-api
-      - key: OIDC_JWKS_URL
-        value: ""
       - key: TEAM_ROOM_REQUIRE_OIDC
         value: "true"
 
