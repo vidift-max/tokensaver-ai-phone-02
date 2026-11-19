@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import TeamRoom from "./TeamRoom";
+import VirtualTablet from "./VirtualTablet";
 
 const modules = [
   {name:"Dashboard",ready:true},{name:"File Center",ready:true},{name:"Token Counter",ready:true},
@@ -221,7 +222,7 @@ export default function App() {
         </div>
 
         {active === "AI Team Room" ? (
-          <TeamRoom />
+          <VirtualTablet />
         ) : active === "Project Memory" ? (
           <section className="panel"><div className="panel-head"><div><h2>Project Memory</h2><p className="muted">Notas persistentes do projeto, armazenadas localmente.</p></div><button className="primary" onClick={() => void loadMemory()}>Atualizar</button></div><div className="project-row"><input value={projectId} onChange={e=>setProjectId(e.target.value)} placeholder="Projeto"/><input value={memoryKey} onChange={e=>setMemoryKey(e.target.value)} placeholder="chave"/><input value={memoryValue} onChange={e=>setMemoryValue(e.target.value)} placeholder="valor"/><button onClick={()=>void saveMemory()}>Salvar</button></div>{memory.map(m=><div className="file-row" key={m.key}><strong>{m.key}</strong><span>{m.value}</span></div>)}</section>
         ) : active === "History" ? (
