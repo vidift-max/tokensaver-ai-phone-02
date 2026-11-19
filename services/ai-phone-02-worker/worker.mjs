@@ -48,8 +48,18 @@ async function tick() {
       continue;
     }
 
-    const result = await executor.execute(message, {
-      authorization: { source: "phone-02-worker", phone_id: client.phoneId }
+    const incomingContent = typeof message.content === "string"
+      ? message.content
+      : JSON.stringify(message.content);
+    const result = await executor.execute({
+      ...message,
+      content: incomingContent
+    }, {
+      authorization: {
+        source: "phone-02-worker",
+        phone_id: client.phoneId,
+        sender_ai_phone_id: message.sender_ai_phone_id
+      }
     });
 
     await client.send(recipient, "reply-" + message.message_id, result.content);
