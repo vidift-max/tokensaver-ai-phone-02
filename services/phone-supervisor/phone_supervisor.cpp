@@ -285,6 +285,8 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
   Log(L"TEAM_ROOM_HEALTH=NOT_CONFIGURED");
  }
  Log(L"TEAM_ROOM_HEALTH_NOT_AUTH=PASS");
+ const bool realTeamRoomSessionAuthenticated=
+  gRealTeamRoomAdapter&&gRealTeamRoomAdapter->authenticated();
  const bool fakeMode=(gTeamRoomFakeMode==L"1");
  if(gTeamRoomFakeMode!=L"0"&&!fakeMode){
   Log(L"TEAM_ROOM_FAKE_MODE=INVALID");
@@ -368,8 +370,6 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
  // The real adapter has already exchanged the one-use OIDC assertion for a
  // Team Room bearer. The RPC gate below may now use that session, but only
  // after the server confirms the provisioned AI-PHONE-02 identity.
- const bool realTeamRoomSessionAuthenticated=
-  gRealTeamRoomAdapter&&gRealTeamRoomAdapter->authenticated();
  const auto secretState=gR5CredentialLoaded?phone_supervisor::r4::SupervisorSecretState::Valid:phone_supervisor::r4::SupervisorSecretState::StoreAbsent;
  const auto decision=phone_supervisor::r4::Evaluate(
   true,
