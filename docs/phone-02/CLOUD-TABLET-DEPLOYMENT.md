@@ -64,3 +64,36 @@ PASS requires all of:
 - voice PASS only if an actual audio path is separately verified.
 
 A browser label, a local speech synthesis event, or a static demo is not sufficient evidence.
+
+
+## Tablet-only operator gate
+
+The user does not have a Windows computer and must not be used as a technical relay between GPT-6 and AI-PHONE-02.
+
+The intended operation is:
+GPT-6 coordinator -> persistent Phone-02 mailbox -> independent Phone-02 executor -> persistent reply -> GPT-6 coordinator.
+
+Windows is not required for this remote-first stage. Windows remains a later physical-device stage.
+
+## External actions that cannot be performed from repository code
+
+1. Connect the Render deployment integration to the user's Render account and deploy this Blueprint.
+2. Complete the OpenAI Platform key-creation flow for the AI-PHONE-02 executor.
+3. Supply the deployment's approved OIDC values/identity provisioning if the chosen identity provider is external.
+
+No secret should be pasted into GitHub, source code, chat, or logs.
+
+## Current implementation hardening
+
+- The worker maintains the endpoint heartbeat.
+- The worker reads the server-issued attachment fence before polling.
+- Persisted JSON message content is normalized to text before invoking the independent executor.
+- Reply delivery uses an idempotency key derived from the incoming message ID.
+- The executor rejects insecure endpoints, missing credentials, oversized requests, invalid JSON, and empty model output.
+- The Team Room container is pinned to the Rust 1.100 toolchain used by CI.
+
+## First-contact decision
+
+Until the hosted runtime is actually deployed and an authenticated Phone-02 endpoint returns a real response, the status remains BLOCKED_EXTERNAL_RUNTIME.
+
+The repository is not allowed to convert this into PASS based on UI labels, local speech synthesis, or static configuration.
