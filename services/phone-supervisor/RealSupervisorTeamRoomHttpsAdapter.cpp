@@ -457,28 +457,6 @@ bool RealSupervisorTeamRoomHttpsAdapter::request(
     return true;
 }
 
-bool RealSupervisorTeamRoomHttpsAdapter::authorizedRequest(
-    const wchar_t* method,
-    const std::wstring& path,
-    const std::string& body,
-    std::string& response,
-    DWORD& status,
-    std::wstring& reason) const {
-    if (teamRoomToken_.empty()) {
-        reason = L"TEAM_ROOM_SESSION_TOKEN_MISSING";
-        return false;
-    }
-
-    if (!request(method, path, body, response, status, reason)) {
-        return false;
-    }
-
-    // Authorization is added in a second, identical request only through WinHTTP's
-    // header API in the implementation below. This function is replaced by the
-    // authenticated helper at call sites where the bearer is required.
-    return true;
-}
-
 bool RealSupervisorTeamRoomHttpsAdapter::parseStringField(
     const std::string& json, const char* key, std::string& out) const {
     return ExtractJsonString(json, key, out);
@@ -529,6 +507,13 @@ bool RealSupervisorTeamRoomHttpsAdapter::authenticate(
     if (workload_assertion.empty() || workload_assertion.size() > 16384 ||
         roomId_.empty() || !ParseUuid(roomId_)) {
         return false;
+    }
+
+    // The OIDC assertion is exchanged without a pre-existing Team Room bearer.
+    // Clear a stale session before retrying so it can never be sent to /auth/exchange.
+    if (!teamRoomToken_.empty()) {
+        SecureZeroMemory(teamRoomToken_.data(), teamRoomToken_.size());
+        teamRoomToken_.clear();
     }
 
     std::string body =
