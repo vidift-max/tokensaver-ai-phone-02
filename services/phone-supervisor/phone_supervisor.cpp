@@ -451,6 +451,18 @@ static void WINAPI ServiceMain(DWORD,LPWSTR*){
      Log(provisionResult);
      if(provisionResult==L"CREDENTIAL_PROVISIONED=PASS"){
       Log(L"CREDENTIAL_PROVISIONING_ADMIN_ONLY=PASS");
+      if(gEndpointCredentialRequired){
+       std::wstring endpointProvisionResult;
+       HANDLE endpointReadyEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);
+       if(endpointReadyEvent){
+        std::thread endpointProvisioningThread([&](){phone_supervisor::r5::ProvisionEndpointCredentialThroughAdminPipe(*r5Store,gServiceSid,gStopEvent,endpointReadyEvent,endpointProvisionResult);});
+        HANDLE endpointWaits[2]={gStopEvent,endpointReadyEvent};
+        DWORD endpointWait=WaitForMultipleObjects(2,endpointWaits,FALSE,65000);
+        if(endpointProvisioningThread.joinable())endpointProvisioningThread.join();
+        Log(endpointWait==WAIT_OBJECT_0+1?endpointProvisionResult:L"ENDPOINT_CREDENTIAL_PROVISIONING=TIMEOUT");
+        CloseHandle(endpointReadyEvent);
+       }else Log(L"ENDPOINT_CREDENTIAL_PROVISIONING=EVENT_CREATE_FAILED");
+      }
       RunR5OidcScenario(*r5Store);
      }else Log(L"CREDENTIAL_PROVISIONING_ADMIN_ONLY=FAIL");
     }else{
