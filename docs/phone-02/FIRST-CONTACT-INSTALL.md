@@ -4,7 +4,7 @@
 This document is the operator/AI checklist for the first real AI-PHONE-02 contact.
 
 ## Package provenance
-- Source branch: `mission/phone-02-p238-b-oidc`
+- Source branch for this readiness work: `mission/remote-contact-tablet-first`
 - The release workflow builds an **unsigned** MSIX artifact automatically on Windows.
 - A signed production package is **not** claimed until the approved signing certificate and verification workflow both succeed.
 - Never treat the GitHub source ZIP as an installed Phone-02.
@@ -30,6 +30,8 @@ Never put any of these in the AppContainer RPC contract, source code, screenshot
 The Supervisor must prove the server-owned `AI_PHONE_ID` matches the locally provisioned Windows installation binding before claiming Phone-02 identity.
 
 ## First contact gate
+
+The Windows Supervisor now supports a protected endpoint-credential store and an admin-only provisioning pipe. The real deployment must provision the server-issued endpoint credential after endpoint registration; the credential is never placed in the AppContainer RPC contract or source/config file.
 Only after identity, OIDC exchange, endpoint registration/attachment, Team Room join, and heartbeat are real and successful:
 1. AI-PHONE-02 sends: "GPT-6, aqui é a AI-PHONE-02. Primeiro contato real iniciado."
 2. GPT-6 replies: "AI-PHONE-02, recebi seu contato. Identidade e canal de comunicação confirmados."
