@@ -16,6 +16,7 @@ export class PhoneRuntimeClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
     this.baseUrl = (env.AI_PHONE_API_URL || "").replace(/\/+$/, "");
     this.sessionToken = env.AI_PHONE_SESSION_TOKEN || "";
+    this.sessionExpiresAt = 0;
     this.oidcIssuer = (env.AI_PHONE_OIDC_ISSUER || "").replace(/\/+$/, "");
     this.oidcClientId = env.AI_PHONE_OIDC_CLIENT_ID || "";
     this.oidcClientSecret = env.AI_PHONE_OIDC_CLIENT_SECRET || "";
@@ -71,7 +72,10 @@ export class PhoneRuntimeClient {
     }
     if (!response.ok) {
       const authorizationLost = response.status === 401 || response.status === 403 || response.status === 412;
-      if (authorizationLost) this.sessionToken = "";
+      if (authorizationLost) {
+        this.sessionToken = "";
+        this.sessionExpiresAt = 0;
+      }
       const code = authorizationLost ? "AUTHORIZATION_LOST" : "HTTP_ERROR";
       throw new PhoneRuntimeError(`AI Phone rejected ${method} ${route} (HTTP ${response.status})`, response.status, code);
     }
@@ -95,7 +99,12 @@ export class PhoneRuntimeClient {
     const payload = await response.json();
     if (typeof payload.access_token !== "string" || !payload.access_token) throw new PhoneRuntimeError("Team Room exchange response is invalid", 502, "INVALID_RESPONSE");
     this.sessionToken = payload.access_token;
+    this.sessionExpiresAt = typeof payload.expires_at === "string" ? Date.parse(payload.expires_at) : 0;
     return payload;
+  }
+
+  shouldRenewSession(now = Date.now(), safetyWindowMs = 60000) {
+    return Boolean(this.sessionToken && this.sessionExpiresAt > 0 && this.sessionExpiresAt <= now + safetyWindowMs);
   }
 
   async joinRoom() {
