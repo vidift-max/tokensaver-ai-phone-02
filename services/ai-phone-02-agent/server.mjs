@@ -20,8 +20,15 @@ const server = http.createServer(async (req, res) => {
   if (!token || !client) return json(res, 503, {error:"executor_not_configured"});
   if (req.headers.authorization !== "Bearer " + token) return json(res, 401, {error:"unauthorized"});
 
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > 32768) {
+    return json(res, 413, {error:"request_too_large"});
+  }
   let raw = "";
-  for await (const chunk of req) raw += chunk;
+  for await (const chunk of req) {
+    raw += chunk;
+    if (Buffer.byteLength(raw, "utf8") > 32768) return json(res, 413, {error:"request_too_large"});
+  }
   let body;
   try { body = JSON.parse(raw); } catch { return json(res, 400, {error:"invalid_json"}); }
   if (typeof body.content !== "string" || !body.content.trim()) return json(res, 400, {error:"content_required"});
@@ -32,6 +39,9 @@ const server = http.createServer(async (req, res) => {
       instructions: system,
       input: body.content
     });
+    if (typeof response.output_text !== "string" || !response.output_text.trim()) {
+      return json(res, 502, {error:"empty_model_response"});
+    }
     return json(res, 200, {content: response.output_text, executor:"ai-phone-02-openai"});
   } catch {
     return json(res, 502, {error:"model_execution_failed"});
