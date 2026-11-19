@@ -89,8 +89,8 @@ export class PhoneRuntimeClient {
 
   async exchangeOidcSession() {
     const token = await this.oidcToken();
-    const response = await this.fetch(this.baseUrl + "/auth/exchange", {method:"POST",redirect:"error",headers:{authorization:"Bearer "+token,"content-type":"application/json",accept:"application/json"},body:JSON.stringify({room_id:this.roomId}),signal:AbortSignal.timeout(10000)});
-    if (!response.ok) throw new PhoneRuntimeError("Team Room OIDC exchange failed", response.status, "OIDC_EXCHANGE_FAILED");
+    const response = await this.fetch(this.baseUrl + "/auth/exchange", {method:"POST",redirect:"error",headers:{authorization:"Bearer "+token,"content-type":"application/json",accept:"application/json"},body:JSON.stringify({room_id:this.roomId,workload_token:token}),signal:AbortSignal.timeout(10000)});
+    if (!response.ok) throw new PhoneRuntimeError(`Team Room OIDC exchange failed (HTTP ${response.status})`, response.status, "OIDC_EXCHANGE_FAILED");
     const payload = await response.json();
     if (typeof payload.access_token !== "string" || !payload.access_token) throw new PhoneRuntimeError("Team Room exchange response is invalid", 502, "INVALID_RESPONSE");
     this.sessionToken = payload.access_token;
