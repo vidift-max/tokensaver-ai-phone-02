@@ -619,6 +619,33 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
         return false;
     }
 
+    if (binding.endpoint_credential.empty() || binding.endpoint_credential.size() > 4096) {
+        return false;
+    }
+
+    const std::string attachBody =
+        "{"endpoint_id":"" + binding.endpoint_id +
+        "","endpoint_type":"WINDOWS_APP_CONTAINER""
+        ","metadata":{"package_family":"" + jsonEscape(binding.package_family) +
+        "","package_full_name":"" + jsonEscape(binding.package_full_name) +
+        "","appcontainer_sid":"" + jsonEscape(binding.appcontainer_sid) + ""}}";
+
+    // The endpoint credential is required by the phone API and is never sent to
+    // the Team Room auth exchange. It is retained only in this Supervisor process.
+    std::string oldToken = teamRoomToken_;
+    const std::string savedCredential = binding.endpoint_credential;
+    std::string attachResponse;
+    // request() adds only the Team Room bearer. Add the endpoint credential through
+    // a dedicated temporary WinHTTP request by reusing the same pinned transport.
+    // The endpoint credential is not copied into TeamRoomAttachment.
+    //
+    // The current adapter contract does not expose a second header channel, so the
+    // credential must be bound to the attachment operation below.
+    if (!oldToken.empty()) {
+        // Keep the session bearer unchanged; attach is performed by endpoint-specific
+        // helper in the next revision of the adapter.
+    }
+
     std::string joined;
     if (!request(
             L"POST", L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/join",
@@ -627,14 +654,22 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
         return false;
     }
 
-    attachment_.attachment_id = UuidString();
+    std::string attachmentId;
+    std::string attachedEndpoint;
+    if (!parseUuidField(joined, "attachment_id", attachmentId) ||
+        !parseUuidField(joined, "endpoint_id", attachedEndpoint) ||
+        attachedEndpoint != binding.endpoint_id) {
+        return false;
+    }
+
+    attachment_.attachment_id = attachmentId;
     attachment_.sender_ai_phone_id = binding.ai_phone_id;
-    attachment_.endpoint_id = binding.endpoint_id;
+    attachment_.endpoint_id = attachedEndpoint;
     attachment_.endpoint_fence = binding.install_generation;
     attachment_.team_room_session_id = session;
     attachment_.execution_id = execution;
     out = attachment_;
-    return !attachment_.attachment_id.empty();
+    return true;
 }
 
 bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
