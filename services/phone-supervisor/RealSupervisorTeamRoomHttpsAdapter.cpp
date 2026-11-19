@@ -647,6 +647,30 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
 
     // The endpoint credential is required by the phone API and is never sent to
     // the Team Room auth exchange. It is retained only in this Supervisor process.
+    std::string phoneAttachment;
+    if (!request(
+            L"POST", L"/ai-phone/attach", attachBody, phoneAttachment,
+            &binding.endpoint_credential, status, reason) ||
+        status != 201) {
+        return false;
+    }
+
+    std::string attachmentId;
+    std::string attachedEndpoint;
+    std::string fenceText;
+    if (!parseUuidField(phoneAttachment, "attachment_id", attachmentId) ||
+        !parseUuidField(phoneAttachment, "endpoint_id", attachedEndpoint) ||
+        !parseStringField(phoneAttachment, "endpoint_fence", fenceText) ||
+        attachedEndpoint != binding.endpoint_id) {
+        return false;
+    }
+    std::uint64_t serverFence = 0;
+    try {
+        serverFence = std::stoull(fenceText);
+    } catch (...) {
+        return false;
+    }
+
     std::string joined;
     if (!request(
             L"POST", L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/join",
@@ -655,18 +679,10 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
         return false;
     }
 
-    std::string attachmentId;
-    std::string attachedEndpoint;
-    if (!parseUuidField(joined, "attachment_id", attachmentId) ||
-        !parseUuidField(joined, "endpoint_id", attachedEndpoint) ||
-        attachedEndpoint != binding.endpoint_id) {
-        return false;
-    }
-
     attachment_.attachment_id = attachmentId;
     attachment_.sender_ai_phone_id = binding.ai_phone_id;
     attachment_.endpoint_id = attachedEndpoint;
-    attachment_.endpoint_fence = binding.install_generation;
+    attachment_.endpoint_fence = serverFence;
     attachment_.team_room_session_id = session;
     attachment_.execution_id = execution;
     endpointCredential_ = binding.endpoint_credential;
