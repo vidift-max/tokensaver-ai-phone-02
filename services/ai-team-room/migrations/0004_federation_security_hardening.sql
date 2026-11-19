@@ -1,0 +1,90 @@
+-- Mission 110: explicit workload registration, permission vocabulary and security audit.
+CREATE TABLE workload_identities (
+    workload_id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    principal_id UUID NOT NULL,
+    issuer TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE'
+        CHECK (status IN ('ACTIVE', 'DISABLED', 'REVOKED', 'EXPIRED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
+    FOREIGN KEY (tenant_id, principal_id)
+        REFERENCES principals(tenant_id, principal_id) ON DELETE CASCADE,
+    UNIQUE (tenant_id, issuer, subject),
+    UNIQUE (tenant_id, principal_id)
+);
+
+-- Existing Mission 109 registered principals become explicitly registered workloads.
+INSERT INTO workload_identities
+    (workload_id, tenant_id, principal_id, issuer, subject, status)
+SELECT gen_random_uuid(), tenant_id, principal_id, provider, external_subject,
+       CASE WHEN enabled THEN 'ACTIVE' ELSE 'DISABLED' END
+FROM principals
+WHERE principal_kind = 'AI'
+ON CONFLICT (tenant_id, principal_id) DO NOTHING;
+
+CREATE INDEX workload_identities_status_idx
+    ON workload_identities(tenant_id, status, last_seen_at DESC);
+
+CREATE TABLE permission_catalog (
+    permission TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    privileged BOOLEAN NOT NULL DEFAULT FALSE
+);
+INSERT INTO permission_catalog(permission, description, privileged) VALUES
+ ('room.join', 'Join the assigned room', FALSE),
+ ('room.read', 'Read room metadata and permitted general resources', FALSE),
+ ('room.write', 'Write general room messages', FALSE),
+ ('task.read', 'Read tasks explicitly visible to the principal', FALSE),
+ ('task.write', 'Create or update tasks within explicit scope', FALSE),
+ ('private_chat', 'Read/write only private channels where principal is a member', FALSE),
+ ('audio', 'Publish or receive authorized live audio', FALSE),
+ ('admin', 'Administrative operations; explicit human-controlled grant only', TRUE)
+ON CONFLICT (permission) DO NOTHING;
+
+CREATE TABLE security_audit_events (
+    security_event_id UUID PRIMARY KEY,
+    tenant_id UUID,
+    room_id UUID,
+    principal_id UUID,
+    action TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('SUCCESS', 'DENIED', 'ERROR')),
+    reason_code TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX security_audit_events_time_idx
+    ON security_audit_events(created_at DESC);
+CREATE INDEX security_audit_events_room_time_idx
+    ON security_audit_events(room_id, created_at DESC);
+
+ALTER TABLE principal_permissions
+    ADD CONSTRAINT principal_permissions_permission_catalog_fk
+    FOREIGN KEY (permission) REFERENCES permission_catalog(permission);
+
+INSERT INTO permission_catalog(permission, description, privileged) VALUES
+ ('message.create', 'Create messages in channels where membership and grants permit', FALSE),
+ ('thread.reply', 'Reply within the ACL of the parent channel', FALSE),
+ ('channel.create_private', 'Create a private channel with explicit participant ACL', FALSE),
+ ('channel.read', 'Read only channels where the principal is an active member', FALSE),
+ ('channel.message', 'Write only channels where the principal is an active member', FALSE),
+ ('task.assign', 'Assign tasks to authorized participants', FALSE),
+ ('task.transition', 'Perform allowed task state transitions', FALSE),
+ ('decision.propose', 'Propose a room decision', FALSE),
+ ('decision.approve', 'Approve a decision under governance policy', TRUE),
+ ('attachment.upload', 'Upload attachments into authorized channels', FALSE),
+ ('attachment.read', 'Read attachments only through parent resource ACL', FALSE),
+ ('audio.publish', 'Publish live audio to an authorized room/channel', FALSE),
+ ('audio.subscribe', 'Subscribe to live audio from authorized participants', FALSE),
+ ('presence.update', 'Update own presence lease', FALSE),
+ ('participant.revoke', 'Revoke a participant; requires explicit privileged grant', TRUE),
+ ('audit.read', 'Read security and room audit records', TRUE),
+ ('github.publish', 'Publish approved artifacts through a separately scoped GitHub integration', TRUE)
+ON CONFLICT (permission) DO NOTHING;
+
+-- One registered principal maps to one room participant identity per tenant.
+CREATE UNIQUE INDEX participants_one_participant_per_principal
+    ON participants(tenant_id, principal_id);
