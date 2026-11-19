@@ -1,6 +1,6 @@
 import http from "node:http";
-import { PhoneRuntimeClient } from "../../scripts/phone-runtime-client.mjs";
-import { RemoteAiExecutor } from "../../scripts/remote-ai-executor.mjs";
+import { PhoneRuntimeClient } from "./scripts/phone-runtime-client.mjs";
+import { RemoteAiExecutor } from "./scripts/remote-ai-executor.mjs";
 
 const client = new PhoneRuntimeClient();
 const executor = new RemoteAiExecutor();
