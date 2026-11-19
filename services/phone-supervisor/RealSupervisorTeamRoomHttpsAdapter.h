@@ -39,7 +39,7 @@ private:
                  const std::wstring& path,
                  const std::string& body,
                  std::string& response,
-                 const std::string* endpointCredential = nullptr,
+                 const std::string* endpointCredential,
                  DWORD& status,
                  std::wstring& reason) const;
     bool parseUuidField(const std::string& json, const char* key, std::string& out) const;
