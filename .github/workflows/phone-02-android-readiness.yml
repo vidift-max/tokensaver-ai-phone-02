@@ -1,0 +1,60 @@
+name: AI-PHONE-02 Android Readiness
+
+on:
+  push:
+    branches:
+      - mission/remote-contact-tablet-first
+  pull_request:
+    branches:
+      - v2-saas-alpha
+      - mission/remote-contact-tablet-first
+  workflow_dispatch:
+
+jobs:
+  android-build-readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web client
+        run: npm run build
+
+      - name: Initialize Tauri Android project
+        run: npx tauri android init
+
+      - name: Build Android APK
+        run: npx tauri android build --apk
+
+      - name: Record readiness boundary
+        run: |
+          echo "ANDROID_BUILD=ATTEMPTED" >> "$GITHUB_STEP_SUMMARY"
+          echo "PHYSICAL_PHONE_INSTALL=NOT_RUN" >> "$GITHUB_STEP_SUMMARY"
+          echo "FIRST_CONTACT=NOT_RUN" >> "$GITHUB_STEP_SUMMARY"
+          echo "REAL_AUDIO=NOT_RUN" >> "$GITHUB_STEP_SUMMARY"
