@@ -659,18 +659,17 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     }
 
     const std::string attachBody =
-        "{"endpoint_id":"" + binding.endpoint_id +
-        "","endpoint_type":"WINDOWS_APP_CONTAINER""
-        ","metadata":{"package_family":"" + jsonEscape(binding.package_family) +
-        "","package_full_name":"" + jsonEscape(binding.package_full_name) +
-        "","appcontainer_sid":"" + jsonEscape(binding.appcontainer_sid) + ""}}";
+        "{\"endpoint_id\":\"" + binding.endpoint_id +
+        "\",\"endpoint_type\":\"MOBILE\",\"metadata\":{\"package_family\":\"" + jsonEscape(binding.package_family) +
+        "\",\"package_full_name\":\"" + jsonEscape(binding.package_full_name) +
+        "\",\"appcontainer_sid\":\"" + jsonEscape(binding.appcontainer_sid) + "\"}}";
 
     // The endpoint credential is required by the phone API and is never sent to
     // the Team Room auth exchange. It is retained only in this Supervisor process.
     std::string phoneAttachment;
     if (!request(
             L"POST", L"/ai-phone/attach", attachBody, phoneAttachment,
-            &binding.endpoint_credential, status, reason) ||
+            status, reason, &binding.endpoint_credential) ||
         status != 201) {
         return false;
     }
@@ -688,7 +687,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     std::string joined;
     if (!request(
             L"POST", L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/join",
-            "", joined, nullptr, status, reason) ||
+            "", joined, status, reason) ||
         status != 200) {
         return false;
     }
@@ -715,15 +714,15 @@ bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
     DWORD status = 0;
     std::wstring reason;
     const std::string phoneBody =
-        "{"endpoint_fence":" + std::to_string(attachment.endpoint_fence) + "}";
+        "{\"endpoint_fence\":" + std::to_string(attachment.endpoint_fence) + "}";
     if (endpointCredential_.empty() ||
         !request(L"POST", L"/ai-phone/heartbeat", phoneBody, response,
-                 &endpointCredential_, status, reason) ||
+                 status, reason, &endpointCredential_) ||
         status != 200) {
         return false;
     }
     if (!request(L"POST", L"/team-room/heartbeat", "", response,
-                 nullptr, status, reason) ||
+                 status, reason) ||
         status != 200) {
         return false;
     }
@@ -737,7 +736,33 @@ bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
 
 bool RealSupervisorTeamRoomHttpsAdapter::reconnect(
     const TeamRoomAttachment& attachment, const std::string&) {
-    return heartbeat(attachment);
+    if (attachment.team_room_session_id != attachment_.team_room_session_id ||
+        attachment.execution_id != attachment_.execution_id ||
+        endpointCredential_.empty() || teamRoomToken_.empty()) {
+        return false;
+    }
+    std::string response;
+    DWORD status = 0;
+    std::wstring reason;
+    const std::string body =
+        "{\"endpoint_id\":\"" + attachment.endpoint_id +
+        "\",\"endpoint_type\":\"MOBILE\",\"metadata\":{}}";
+    if (!request(L"POST", L"/ai-phone/reconnect", body, response,
+                 status, reason, &endpointCredential_) || status != 200) {
+        return false;
+    }
+    std::string attachmentId;
+    std::string endpointId;
+    std::uint64_t fence = 0;
+    if (!parseUuidField(response, "attachment_id", attachmentId) ||
+        !parseUuidField(response, "endpoint_id", endpointId) ||
+        !ParseUInt64Field(response, "endpoint_fence", fence) ||
+        endpointId != attachment.endpoint_id) {
+        return false;
+    }
+    attachment_.attachment_id = attachmentId;
+    attachment_.endpoint_fence = fence;
+    return true;
 }
 
 bool RealSupervisorTeamRoomHttpsAdapter::detach(
@@ -751,10 +776,19 @@ bool RealSupervisorTeamRoomHttpsAdapter::detach(
     std::wstring reason;
     const std::wstring path =
         L"/team-room/" + std::wstring(roomId_.begin(), roomId_.end()) + L"/leave";
+    std::string phoneResponse;
+    if (endpointCredential_.empty() ||
+        !request(L"POST", L"/ai-phone/detach",
+                 "{\"endpoint_fence\":" + std::to_string(attachment.endpoint_fence) + "}",
+                 phoneResponse, status, reason, &endpointCredential_) ||
+        status != 204) {
+        return false;
+    }
     if (!request(L"POST", path, "", response, status, reason) || status != 204) {
         return false;
     }
     attachment_ = {};
+    endpointCredential_.clear();
     return true;
 }
 
