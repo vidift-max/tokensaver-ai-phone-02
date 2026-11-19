@@ -45,6 +45,7 @@ static bool gStopping=false;
 static bool gR5TestMode=false,gR5CredentialLoaded=false;
 static std::wstring gCredentialStoreRoot;
 static phone_supervisor::r5::SecureBuffer gOidcAccessToken;
+static phone_supervisor::r5::SecureBuffer gEndpointCredential;
 static std::unique_ptr<phone_supervisor::RealSupervisorTeamRoomHttpsAdapter> gRealTeamRoomAdapter;
 enum RpcStatus:long{RPC_OK=0,RPC_INVALID_ARGUMENT=1,RPC_ACCESS_DENIED=2,RPC_SESSION_NOT_FOUND=3,RPC_SESSION_EXPIRED=4,RPC_REPLAY=5,RPC_INTERNAL_ERROR=6,RPC_SERVICE_STOPPING=7};
 static_assert(phone_supervisor::r4::kRpcOk==RPC_OK && phone_supervisor::r4::kRpcAccessDenied==RPC_ACCESS_DENIED,"R4 gate RPC status contract mismatch");
@@ -133,6 +134,12 @@ static bool RunR5OidcScenario(phone_supervisor::r5::SupervisorCredentialStore& s
  secret.Clear();Log(L"OIDC_SECRET_BUFFER_ZEROED=PASS");
  Log(L"SUPERVISOR_OIDC_TOKEN_EXCHANGE=PASS");
  if(acquired&&!gOidcAccessToken.empty()&&!gTeamRoomHttpsEndpoint.empty()&&!gTeamRoomRoomId.empty()){
+  std::wstring endpointCredentialReason;
+  if(store.ReadEndpointCredential(gEndpointCredential,endpointCredentialReason)){
+   Log(L"ENDPOINT_CREDENTIAL_STORE_READ=PASS");
+  }else{
+   Log(L"ENDPOINT_CREDENTIAL_STORE_READ=BLOCKED reason="+endpointCredentialReason);
+  }
   gRealTeamRoomAdapter=std::make_unique<phone_supervisor::RealSupervisorTeamRoomHttpsAdapter>();
   gRealTeamRoomAdapter->Configure(
     gTeamRoomHttpsEndpoint,
@@ -302,7 +309,9 @@ void TeamRoomScenario(handle_t binding,wchar_t*correlation,wchar_t*sessionId,lon
   }
   phone_supervisor::ProvisionedPhoneBinding provisioned{
    Ascii(gProvisionedAiPhoneId),Ascii(gTeamRoomEndpointId),
-   Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),1};
+   Ascii(observed.family),Ascii(observed.full),Ascii(observed.appSid),
+   gEndpointCredential.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(gEndpointCredential.data()),gEndpointCredential.size()),
+   1};
   phone_supervisor::TeamRoomAttachment realAttachment;
   if(!gRealTeamRoomAdapter->attach(provisioned,realAttachment)){
    Log(L"TEAM_ROOM_REAL_ATTACH=FAIL");
@@ -456,7 +465,7 @@ static void WINAPI ServiceMain(DWORD,LPWSTR*){
  RpcMgmtStopServerListening(nullptr);RpcMgmtWaitServerListen();RpcServerUnregisterIf(PhoneSupervisorRpc_v1_1_s_ifspec,nullptr,TRUE);
  {std::lock_guard<std::mutex>l(gMutex);for(auto&kv:gSessions)SecureZeroMemory(kv.second.nonceHash.data(),kv.second.nonceHash.size());gSessions.clear();}
  if(gR5TestMode){
-  gOidcAccessToken.Clear();if(gRealTeamRoomAdapter){gRealTeamRoomAdapter->Clear();gRealTeamRoomAdapter.reset();}Log(L"TOKEN_MEMORY_ZEROED=PASS");
+  gOidcAccessToken.Clear();gEndpointCredential.Clear();if(gRealTeamRoomAdapter){gRealTeamRoomAdapter->Clear();gRealTeamRoomAdapter.reset();}Log(L"TOKEN_MEMORY_ZEROED=PASS");
   std::wstring removeReason;bool removed=r5Store&&r5Store->RemoveClientSecret(removeReason);
   Log(std::wstring(L"CREDENTIAL_REMOVE=")+(removed?L"PASS":L"FAIL"));
   bool clean=removed&&gOidcAccessToken.empty()&&(!r5Store||!r5Store->Exists());
