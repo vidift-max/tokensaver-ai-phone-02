@@ -393,6 +393,13 @@ bool RealSupervisorTeamRoomHttpsAdapter::request(
     }
 
     const wchar_t headers[] = L"Content-Type: application/json\r\nAccept: application/json\r\n";
+    if (!teamRoomToken_.empty()) {
+        std::wstring bearer = L"Authorization: Bearer " + std::wstring(teamRoomToken_.begin(), teamRoomToken_.end());
+        if (!WinHttpAddRequestHeaders(request.get(), bearer.c_str(), static_cast<DWORD>(-1L), WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
+            reason = Error(L"AUTHORIZATION_HEADER", GetLastError());
+            return false;
+        }
+    }
     LPVOID data = body.empty()
         ? WINHTTP_NO_REQUEST_DATA
         : const_cast<char*>(body.data());
@@ -678,7 +685,10 @@ bool RealSupervisorTeamRoomHttpsAdapter::send(
         idempotency_key.empty() || idempotency_key.size() > 200) {
         return false;
     }
-    const std::string clientMessageId = UuidString();
+    std::string clientMessageId = idempotency_key;
+    if (!ParseUuid(clientMessageId)) {
+        clientMessageId = UuidString();
+    }
     if (clientMessageId.empty()) {
         return false;
     }
