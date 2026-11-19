@@ -26,7 +26,7 @@ type SpeechWindow = Window & {
 };
 
 export default function TeamRoom() {
-  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("phone02-api-url") || import.meta.env.VITE_TEAM_ROOM_API_URL || "http://127.0.0.1:8081");
+  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("phone02-api-url") || import.meta.env.VITE_TEAM_ROOM_API_URL || window.location.origin);
   const [roomId, setRoomId] = useState(() => localStorage.getItem("phone02-room-id") || import.meta.env.VITE_TEAM_ROOM_ROOM_ID || "");
   const [token, setToken] = useState(() => sessionStorage.getItem("phone02-session-token") || "");
   const [autoReconnect, setAutoReconnect] = useState(() => localStorage.getItem("phone02-auto-reconnect") !== "false");
