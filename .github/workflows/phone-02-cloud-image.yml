@@ -16,5 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build hosted tablet + Team Room image
         run: docker build -f services/ai-team-room/Dockerfile -t ai-phone-02-team-room:ci .
+      - name: Build independent Phone-02 AI executor image
+        run: docker build -f services/ai-phone-02-agent/Dockerfile -t ai-phone-02-agent:ci .
       - name: Verify image exists
         run: docker image inspect ai-phone-02-team-room:ci >/dev/null
