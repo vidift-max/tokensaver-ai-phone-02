@@ -80,6 +80,7 @@ async function ensureHeartbeat(force = false) {
   if (!force && now - lastHeartbeat < heartbeatEvery && Number.isInteger(endpointFence)) return;
   if (!Number.isInteger(endpointFence)) await refreshBinding();
   await client.heartbeat(endpointFence);
+  await client.heartbeatRoom();
   lastHeartbeat = now;
 }
 
