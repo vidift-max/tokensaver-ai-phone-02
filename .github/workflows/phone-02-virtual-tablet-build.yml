@@ -1,0 +1,31 @@
+name: AI-PHONE-02 Virtual Tablet Build
+
+on:
+  push:
+    branches:
+      - mission/remote-contact-tablet-first
+  pull_request:
+    branches:
+      - v2-saas-alpha
+      - mission/remote-contact-tablet-first
+
+jobs:
+  web-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: TypeScript and Vite build
+        run: npm run build
+      - name: Verify PWA shell
+        shell: bash
+        run: |
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+          grep -q "AI-PHONE-02" dist/index.html
+          echo "VIRTUAL_TABLET_BUILD=PASS"
