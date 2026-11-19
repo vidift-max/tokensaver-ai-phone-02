@@ -332,24 +332,49 @@ bool RealSupervisorTeamRoomHttpsAdapter::request(
         return false;
     }
 
+    // The configured endpoint is pinned to the approved HTTPS host/port.
+    // Individual API paths are selected by the adapter and are never accepted
+    // from untrusted input.
+    URL_COMPONENTS components{};
     std::wstring validation;
-    if (!ValidateEndpoint(endpoint_, validation)) {
-        reason = validation;
-        return false;
+    {
+        URL_COMPONENTS base{};
+        base.dwStructSize = sizeof(base);
+        base.dwSchemeLength = base.dwHostNameLength =
+            base.dwUserNameLength = base.dwPasswordLength =
+            base.dwUrlPathLength = base.dwExtraInfoLength = static_cast<DWORD>(-1);
+        if (!WinHttpCrackUrl(endpoint_.c_str(), static_cast<DWORD>(endpoint_.size()), 0, &base) ||
+            base.nScheme != INTERNET_SCHEME_HTTPS ||
+            base.nPort != kPort ||
+            (base.lpszUserName && base.dwUserNameLength) ||
+            (base.lpszPassword && base.dwPasswordLength)) {
+            reason = L"TEAM_ROOM_BASE_ENDPOINT_NOT_ALLOWED";
+            return false;
+        }
+        std::wstring host(base.lpszHostName, base.dwHostNameLength);
+        if (!SameHost(host)) {
+            reason = L"TEAM_ROOM_BASE_HOST_NOT_ALLOWLISTED";
+            return false;
+        }
+        if ((base.lpszExtraInfo && base.dwExtraInfoLength) ||
+            (base.lpszUrlPath && base.dwUrlPathLength &&
+             std::wstring(base.lpszUrlPath, base.dwUrlPathLength) != L"/health/live")) {
+            // The configured URL may be the health URL only; API routes are appended below.
+            if (base.lpszExtraInfo && base.dwExtraInfoLength) {
+                reason = L"TEAM_ROOM_BASE_QUERY_OR_FRAGMENT_FORBIDDEN";
+                return false;
+            }
+        }
     }
 
-    URL_COMPONENTS components{};
-    components.dwStructSize = sizeof(components);
-    components.dwSchemeLength = components.dwHostNameLength =
-        components.dwUrlPathLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(
-            endpoint_.c_str(), static_cast<DWORD>(endpoint_.size()), 0, &components)) {
+    if (!WinHttpCrackUrl(endpoint_.c_str(), static_cast<DWORD>(endpoint_.size()), 0, &components)) {
         reason = Error(L"WinHttpCrackUrl", GetLastError());
         return false;
     }
-
     std::wstring host(components.lpszHostName, components.dwHostNameLength);
-
+    components.dwStructSize = sizeof(components);
+    components.dwSchemeLength = components.dwHostNameLength =
+        components.dwUrlPathLength = static_cast<DWORD>(-1);
     Handle session(WinHttpOpen(
         L"TokenSaver-Phone02-Supervisor/P2.38-B",
         WINHTTP_ACCESS_TYPE_NO_PROXY,
