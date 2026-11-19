@@ -62,4 +62,35 @@ test("clears a rejected session token so the worker must obtain a fresh OIDC ses
   const client = new PhoneRuntimeClient(config, async () => response(401, {error:"session_expired"}));
   await assert.rejects(() => client.poll(), e => e.code === "AUTHORIZATION_LOST" && e.status === 401);
   assert.equal(client.sessionToken, "");
+  assert.equal(client.sessionExpiresAt, 0);
+});
+
+test("exchanges OIDC workload credentials and tracks the local session expiry", async () => {
+  const oidcConfig = {
+    AI_PHONE_API_URL: "https://phone.example.test",
+    AI_PHONE_OIDC_ISSUER: "https://identity.example.test",
+    AI_PHONE_OIDC_CLIENT_ID: "phone-runtime",
+    AI_PHONE_OIDC_CLIENT_SECRET: "client-secret",
+    TEAM_ROOM_ROOM_ID: "40000000-0000-4000-8000-000000000004",
+    AI_PHONE_ENDPOINT_CREDENTIAL: "x".repeat(48),
+    AI_PHONE_ID: phoneId,
+    PHONE02_ENDPOINT_ID: "30000000-0000-4000-8000-000000000003"
+  };
+  const expiresAt = new Date(Date.now() + 300000).toISOString();
+  const calls = [];
+  const client = new PhoneRuntimeClient(oidcConfig, async (url, init) => {
+    calls.push({url,init});
+    if (url.endsWith("/protocol/openid-connect/token")) {
+      return response(200, {access_token:"oidc-workload-token",expires_in:300});
+    }
+    return response(200, {access_token:"team-room-session-token",expires_at:expiresAt});
+  });
+  await client.exchangeOidcSession();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, "https://phone.example.test/auth/exchange");
+  assert.equal(JSON.parse(calls[1].init.body).workload_token, "oidc-workload-token");
+  assert.equal(client.sessionToken, "team-room-session-token");
+  assert.equal(client.sessionExpiresAt, Date.parse(expiresAt));
+  assert.equal(client.shouldRenewSession(Date.now(), 60000), false);
+  assert.equal(client.shouldRenewSession(Date.parse(expiresAt)-30000, 60000), true);
 });
