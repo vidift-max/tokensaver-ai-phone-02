@@ -714,7 +714,16 @@ bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
     std::string response;
     DWORD status = 0;
     std::wstring reason;
-    if (!request(L"POST", L"/team-room/heartbeat", "", response, &endpointCredential_, status, reason) ||
+    const std::string phoneBody =
+        "{"endpoint_fence":" + std::to_string(attachment.endpoint_fence) + "}";
+    if (endpointCredential_.empty() ||
+        !request(L"POST", L"/ai-phone/heartbeat", phoneBody, response,
+                 &endpointCredential_, status, reason) ||
+        status != 200) {
+        return false;
+    }
+    if (!request(L"POST", L"/team-room/heartbeat", "", response,
+                 nullptr, status, reason) ||
         status != 200) {
         return false;
     }
