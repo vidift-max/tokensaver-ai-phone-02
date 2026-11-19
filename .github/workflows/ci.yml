@@ -1,0 +1,430 @@
+name: TokenSaver AI CI
+
+# Keep only the newest validation for this branch; older push runs validate superseded trees.
+concurrency:
+  group: tokensaver-ai-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - v2-saas-alpha
+      - fix/phone-message-inbox-ack-filter
+      - security/phone-02-mission-authorization
+      - security/phone-02-encrypted-result-store
+      - security/phone-02-os-key-provider
+      - security/phone-02-windows-acl
+      - mission/phone-02-controlled-integration
+  pull_request:
+    branches:
+      - v2-saas-alpha
+      - mission/phone-02-first-contact-pair-auth
+
+jobs:
+  foundation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Tauri Linux dependencies
+        timeout-minutes: 8
+        run: |
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|azure.archive.ubuntu.com|mirrors.edge.kernel.org|g' /etc/apt/apt-mirrors.txt
+            echo "Using Ubuntu package mirror list:"
+            cat /etc/apt/apt-mirrors.txt
+          fi
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's|azure.archive.ubuntu.com|mirrors.edge.kernel.org|g' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: cargo check --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npm install
+      - run: npm run test:missions
+      - run: npm run test:phone-runtime
+      - run: npm run test:phone-worker
+      - run: npm run test:phone-store
+      - run: npm run test:phone-key-provider
+      - run: npm run test:phone-windows-acl
+      - run: npm run test:phone-envelope
+      - run: npm run test:phone-authorizer
+      - run: npm run test:phone-bootstrap
+      - run: npm run build
+      - name: Package source ZIP
+        run: zip -r tokensaver-ai-v2-saas-alpha.zip . -x ".git/*" "node_modules/*" "src-tauri/target/*" "dist/*" "*/node_modules/*" "*/target/*"
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokensaver-ai-v2-saas-alpha-source
+          path: tokensaver-ai-v2-saas-alpha.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  foundation-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Smoke-test CONTINUE_MISSION.bat on Windows
+        shell: cmd
+        run: |
+          CONTINUE_MISSION.bat help
+          if errorlevel 1 exit /b 1
+          CONTINUE_MISSION.bat init CI-WINDOWS-1 1 Windows-BAT-smoke-test
+          if errorlevel 1 exit /b 1
+          CONTINUE_MISSION.bat status
+          if errorlevel 1 exit /b 1
+          CONTINUE_MISSION.bat assign ci-runner ci-participant
+          if errorlevel 1 exit /b 1
+          CONTINUE_MISSION.bat acknowledge
+          if errorlevel 1 exit /b 1
+          REM No Team Room session is provisioned in CI; start must fail closed.
+          CONTINUE_MISSION.bat start
+          if not errorlevel 1 exit /b 1
+          CONTINUE_MISSION.bat status
+          if errorlevel 1 exit /b 1
+      - run: cargo check --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npm install
+      - run: npm run test:missions
+      - run: npm run test:phone-runtime
+      - run: npm run test:phone-worker
+      - name: Probe Windows temporary PowerShell PS1 transport independently
+        run: node --test --test-reporter=spec tests/phone-powershell-ps1.test.mjs
+      - run: npm run test:phone-store
+      - run: npm run test:phone-windows-acl
+      - run: npm run test:phone-key-provider
+      - run: npm run test:phone-envelope
+      - run: npm run test:phone-authorizer
+      - run: npm run test:phone-bootstrap
+      - run: npm run build
+
+
+  ai-team-room-service:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: team_room
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: team_room_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U team_room -d team_room_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://team_room:ci-only-password@localhost:5432/team_room_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt
+      - name: Check independent service
+        run: cargo check --manifest-path services/ai-team-room/Cargo.toml
+      - name: Run service unit and PostgreSQL integration tests
+        run: cargo test --manifest-path services/ai-team-room/Cargo.toml
+
+  keycloak-oidc-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: team_room
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: team_room_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U team_room -d team_room_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://team_room:ci-only-password@localhost:5432/team_room_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Start ephemeral Keycloak container
+        run: |
+          docker run --detach --name keycloak-ci -p 8080:8080 -p 9000:9000 \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=ci-admin \
+            -e KC_BOOTSTRAP_ADMIN_PASSWORD=ci-only-bootstrap-password \
+            -e KC_HEALTH_ENABLED=true \
+            quay.io/keycloak/keycloak:26.3.5 start-dev --http-enabled=true --hostname-strict=false
+      - name: Wait for Keycloak readiness
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:9000/health/ready >/dev/null; then
+              break
+            fi
+            sleep 5
+          done
+          curl --fail --show-error http://127.0.0.1:9000/health/ready
+      - name: Create ephemeral realm and confidential client
+        id: provision
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="admin-login"
+          STAGE="admin-login"
+          ADMIN_TOKEN="$(curl --fail --silent --show-error \
+            -d 'client_id=admin-cli' -d 'username=ci-admin' \
+            -d 'password=ci-only-bootstrap-password' -d 'grant_type=password' \
+            http://127.0.0.1:8080/realms/master/protocol/openid-connect/token | jq -r .access_token)"
+          test -n "$ADMIN_TOKEN" && test "$ADMIN_TOKEN" != "null"
+          curl --fail --silent --show-error -o /dev/null -w '%{http_code}' \
+            -X POST http://127.0.0.1:8080/admin/realms \
+            -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+            -d '{"realm":"team-room-ci","enabled":true}' | grep -q '^201$'
+          CLIENT_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::$CLIENT_SECRET"
+          curl --fail --silent --show-error -o /dev/null -w '%{http_code}' \
+            -X POST http://127.0.0.1:8080/admin/realms/team-room-ci/clients \
+            -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg secret "$CLIENT_SECRET" \
+              '{clientId:"team-room-ci",name:"Ephemeral CI OIDC client",enabled:true,protocol:"openid-connect",publicClient:false,clientAuthenticatorType:"client-secret",secret:$secret,serviceAccountsEnabled:true,standardFlowEnabled:false,directAccessGrantsEnabled:false}')" | grep -q '^201$'
+          echo "client_secret=$CLIENT_SECRET" >> "$GITHUB_OUTPUT"
+      - name: Verify real OIDC discovery, client-credentials token and JWKS signature
+        env:
+          CLIENT_SECRET: ${{ steps.provision.outputs.client_secret }}
+        run: |
+          set -euo pipefail
+          ISSUER="http://127.0.0.1:8080/realms/team-room-ci"
+          DISCOVERY="$(curl --fail --silent --show-error "$ISSUER/.well-known/openid-configuration")"
+          test "$(echo "$DISCOVERY" | jq -r .issuer)" = "$ISSUER"
+          TOKEN_ENDPOINT="$(echo "$DISCOVERY" | jq -r .token_endpoint)"
+          JWKS_URI="$(echo "$DISCOVERY" | jq -r .jwks_uri)"
+          STAGE="client-credentials-token"
+          TOKEN_RESPONSE="$(curl --fail --silent --show-error \
+            -u "team-room-ci:$CLIENT_SECRET" -d 'grant_type=client_credentials' "$TOKEN_ENDPOINT")"
+          ACCESS_TOKEN="$(echo "$TOKEN_RESPONSE" | jq -r .access_token)"
+          test -n "$ACCESS_TOKEN" && test "$ACCESS_TOKEN" != "null"
+          export ISSUER ACCESS_TOKEN JWKS_URI
+          node <<'NODE'
+          const crypto = require('node:crypto');
+          const decode = value => JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+          (async () => {
+            const [headerPart, payloadPart, signaturePart] = process.env.ACCESS_TOKEN.split('.');
+            if (!headerPart || !payloadPart || !signaturePart) throw new Error('Malformed JWT');
+            const header = decode(headerPart);
+            const claims = decode(payloadPart);
+            if (header.alg !== 'RS256' || !header.kid) throw new Error('Unexpected JWT header');
+            if (claims.iss !== process.env.ISSUER || !claims.sub || !claims.jti || !claims.exp) {
+              throw new Error('Required issuer/sub/jti/exp claims missing or invalid');
+            }
+            if (claims.exp <= Math.floor(Date.now() / 1000)) throw new Error('Expired token');
+            const response = await fetch(process.env.JWKS_URI);
+            if (!response.ok) throw new Error('JWKS fetch failed: ' + response.status);
+            const jwks = await response.json();
+            const matches = jwks.keys.filter(key => key.kid === header.kid && key.kty === 'RSA' && key.alg === 'RS256');
+            if (matches.length !== 1) throw new Error('Expected exactly one matching RSA signing key');
+            const key = crypto.createPublicKey({ key: matches[0], format: 'jwk' });
+            const valid = crypto.verify('RSA-SHA256', Buffer.from(headerPart + '.' + payloadPart),
+              key, Buffer.from(signaturePart, 'base64url'));
+            if (!valid) throw new Error('JWT signature verification failed');
+            console.log('PASS: live Keycloak discovery, client_credentials token, JWKS lookup and RS256 signature');
+          })().catch(error => { console.error(error); process.exit(1); });
+          NODE
+      - name: Build AI Team Room service for live federation test
+        run: cargo build --manifest-path services/ai-team-room/Cargo.toml
+      - name: Prove real Keycloak token through exchange, session, authorization and PostgreSQL admission
+        env:
+          CLIENT_SECRET: ${{ steps.provision.outputs.client_secret }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          STAGE="initialization"
+          SERVICE_PID=""
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then echo "E2E_FAILURE_STAGE=$STAGE exit=$status"; fi
+            if [ -n "$SERVICE_PID" ]; then kill "$SERVICE_PID" 2>/dev/null || true; fi
+          }
+          trap cleanup EXIT
+          ISSUER="http://127.0.0.1:8080/realms/team-room-ci"
+          ADMIN_TOKEN="$(curl --fail --silent --show-error \
+            -d 'client_id=admin-cli' -d 'username=ci-admin' \
+            -d 'password=ci-only-bootstrap-password' -d 'grant_type=password' \
+            http://127.0.0.1:8080/realms/master/protocol/openid-connect/token | jq -r .access_token)"
+          echo "::add-mask::$ADMIN_TOKEN"
+          STAGE="client-lookup"
+          CLIENT_ID="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            "http://127.0.0.1:8080/admin/realms/team-room-ci/clients?clientId=team-room-ci" | jq -r '.[0].id')"
+          test -n "$CLIENT_ID" && test "$CLIENT_ID" != "null"
+
+          # Remove the default account scope; the resource server intentionally requires
+          # exactly one audience and must not accept an extra "account" audience.
+          DEFAULT_SCOPES="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/default-client-scopes")"
+          echo "Keycloak default client scopes: $(echo "$DEFAULT_SCOPES" | jq -r '[.[].name] | join(",")')"
+          ROLES_SCOPE_ID="$(echo "$DEFAULT_SCOPES" | jq -r '.[] | select(.name=="roles") | .id' | head -n 1)"
+          if [ -n "$ROLES_SCOPE_ID" ] && [ "$ROLES_SCOPE_ID" != "null" ]; then
+            curl --fail --silent --show-error -o /dev/null \
+              -X DELETE "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/default-client-scopes/$ROLES_SCOPE_ID" \
+              -H "Authorization: Bearer $ADMIN_TOKEN"
+          fi
+          ACCOUNT_SCOPE_ID="$(echo "$DEFAULT_SCOPES" | jq -r '.[] | select(.name=="account") | .id' | head -n 1)"
+          if [ -n "$ACCOUNT_SCOPE_ID" ] && [ "$ACCOUNT_SCOPE_ID" != "null" ]; then
+            curl --fail --silent --show-error -o /dev/null \
+              -X DELETE "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/default-client-scopes/$ACCOUNT_SCOPE_ID" \
+              -H "Authorization: Bearer $ADMIN_TOKEN"
+          fi
+          OPTIONAL_SCOPES="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/optional-client-scopes")"
+          OPTIONAL_ACCOUNT_ID="$(echo "$OPTIONAL_SCOPES" | jq -r '.[] | select(.name=="account") | .id' | head -n 1)"
+          if [ -n "$OPTIONAL_ACCOUNT_ID" ] && [ "$OPTIONAL_ACCOUNT_ID" != "null" ]; then
+            curl --fail --silent --show-error -o /dev/null \
+              -X DELETE "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/optional-client-scopes/$OPTIONAL_ACCOUNT_ID" \
+              -H "Authorization: Bearer $ADMIN_TOKEN"
+          fi
+
+          # Give the real Keycloak client a default scope and an explicit API audience.
+          STAGE="create-client-scope"
+          curl --fail --silent --show-error -o /dev/null \
+            -X POST http://127.0.0.1:8080/admin/realms/team-room-ci/client-scopes \
+            -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+            -d '{"name":"team_room:connect","protocol":"openid-connect","attributes":{"display.on.consent.screen":"false","include.in.token.scope":"true"}}'
+          SCOPE_ID="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            http://127.0.0.1:8080/admin/realms/team-room-ci/client-scopes | jq -r '.[] | select(.name=="team_room:connect") | .id')"
+          test -n "$SCOPE_ID" && test "$SCOPE_ID" != "null"
+          curl --fail --silent --show-error -o /dev/null \
+            -X POST "http://127.0.0.1:8080/admin/realms/team-room-ci/client-scopes/$SCOPE_ID/protocol-mappers/models" \
+            -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+            -d '{"name":"team-room-api-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","consentRequired":false,"config":{"included.client.audience":"team-room-api","id.token.claim":"false","access.token.claim":"true"}}'
+          curl --fail --silent --show-error -o /dev/null \
+            -X PUT "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/default-client-scopes/$SCOPE_ID" \
+            -H "Authorization: Bearer $ADMIN_TOKEN"
+
+          STAGE="service-account-lookup"
+          SERVICE_ACCOUNT_SUB="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            "http://127.0.0.1:8080/admin/realms/team-room-ci/clients/$CLIENT_ID/service-account-user" | jq -r .id)"
+          test -n "$SERVICE_ACCOUNT_SUB" && test "$SERVICE_ACCOUNT_SUB" != "null"
+          STAGE="client-credentials-token"
+          TOKEN_ENDPOINT="$ISSUER/protocol/openid-connect/token"
+          TOKEN_RESPONSE="$(curl --fail --silent --show-error \
+            -u "team-room-ci:$CLIENT_SECRET" -d 'grant_type=client_credentials' "$TOKEN_ENDPOINT")"
+          ACCESS_TOKEN="$(echo "$TOKEN_RESPONSE" | jq -r .access_token)"
+          test -n "$ACCESS_TOKEN" && test "$ACCESS_TOKEN" != "null"
+          echo "::add-mask::$ACCESS_TOKEN"
+
+          export ACCESS_TOKEN ISSUER SERVICE_ACCOUNT_SUB
+          TOKEN_CLAIMS="$(node -e 'const p=process.env.ACCESS_TOKEN.split(".")[1];process.stdout.write(Buffer.from(p,"base64url").toString("utf8"))')"
+          TOKEN_SUB="$(echo "$TOKEN_CLAIMS" | jq -r .sub)"
+          TOKEN_AUD="$(echo "$TOKEN_CLAIMS" | jq -r '.aud | if type=="array" then join(",") else . end')"
+          TOKEN_SCOPE="$(echo "$TOKEN_CLAIMS" | jq -r .scope)"
+          echo "Keycloak token audience claim: $TOKEN_AUD"
+          echo "Keycloak token scope claim: $TOKEN_SCOPE"
+          STAGE="assert-keycloak-service-account-subject"
+          test "$TOKEN_SUB" = "$SERVICE_ACCOUNT_SUB"
+          STAGE="assert-keycloak-api-audience"
+          test "$TOKEN_AUD" = "team-room-api"
+          STAGE="assert-keycloak-workload-scope"
+          echo "$TOKEN_SCOPE" | tr ' ' '\n' | grep -Fxq 'team_room:connect'
+
+          STAGE="service-startup"
+          export OIDC_ISSUER="$ISSUER" OIDC_AUDIENCE="team-room-api" OIDC_ALLOW_HTTP_LOCALHOST="true"
+          RUST_LOG=info ./services/ai-team-room/target/debug/ai-team-room-service > ai-team-room-service.log 2>&1 &
+          SERVICE_PID=$!
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8081/health/ready >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:8081/health/ready >/dev/null
+
+          STAGE="database-registration"
+          TENANT_ID="$(psql "$DATABASE_URL" -qAtc "INSERT INTO tenants (tenant_id,name) VALUES (gen_random_uuid(),'keycloak-e2e') RETURNING tenant_id")"
+          ROOM_ID="$(psql "$DATABASE_URL" -qAtc "INSERT INTO rooms (room_id,tenant_id,name) VALUES (gen_random_uuid(),'$TENANT_ID','keycloak-e2e-room') RETURNING room_id")"
+          PRINCIPAL_ID="$(psql "$DATABASE_URL" -qAtc "INSERT INTO principals (principal_id,tenant_id,principal_kind,provider,external_subject) VALUES (gen_random_uuid(),'$TENANT_ID','AI','$ISSUER','$TOKEN_SUB') RETURNING principal_id")"
+          PARTICIPANT_ID="$(psql "$DATABASE_URL" -qAtc "INSERT INTO participants (participant_id,tenant_id,principal_id,display_name) VALUES (gen_random_uuid(),'$TENANT_ID','$PRINCIPAL_ID','Keycloak E2E workload') RETURNING participant_id")"
+          WORKLOAD_ID="$(psql "$DATABASE_URL" -qAtc "INSERT INTO workload_identities (workload_id,tenant_id,principal_id,issuer,subject,status) VALUES (gen_random_uuid(),'$TENANT_ID','$PRINCIPAL_ID','$ISSUER','$TOKEN_SUB','ACTIVE') RETURNING workload_id")"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO principal_permissions (permission_id,tenant_id,principal_id,room_id,permission) VALUES (gen_random_uuid(),'$TENANT_ID','$PRINCIPAL_ID','$ROOM_ID','room.join')" >/dev/null
+
+          STAGE="token-exchange"
+          EXCHANGE_BODY="$(jq -nc --arg room "$ROOM_ID" --arg token "$ACCESS_TOKEN" '{room_id:$room,workload_token:$token}')"
+          EXCHANGE_STATUS="$(curl --silent --show-error -o exchange.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' -X POST http://127.0.0.1:8081/auth/exchange -d "$EXCHANGE_BODY")"
+          test "$EXCHANGE_STATUS" = "200"
+          LOCAL_TOKEN="$(jq -r .access_token exchange.json)"
+          test -n "$LOCAL_TOKEN" && test "$LOCAL_TOKEN" != "null"
+          echo "::add-mask::$LOCAL_TOKEN"
+          SESSION_ID="$(jq -r .identity.session_id exchange.json)"
+          test "$(jq -r .identity.issuer exchange.json)" = "$ISSUER"
+          test "$(jq -r .identity.subject exchange.json)" = "$TOKEN_SUB"
+          test "$(jq -r .identity.principal_id exchange.json)" = "$PRINCIPAL_ID"
+          test "$(jq -r .identity.participant_id exchange.json)" = "$PARTICIPANT_ID"
+          test "$(jq -r .identity.room_id exchange.json)" = "$ROOM_ID"
+          test "$(jq -r .token_type exchange.json)" = "Bearer"
+
+          SESSION_DIGEST="$(printf '%s' "$LOCAL_TOKEN" | sha256sum | awk '{print $1}')"
+          DB_SESSION="$(psql "$DATABASE_URL" -Atc \
+            "SELECT status || ':' || (expires_at > NOW())::text || ':' || (encode(token_hash,'hex')='$SESSION_DIGEST')::text FROM sessions WHERE session_id='$SESSION_ID' AND principal_id='$PRINCIPAL_ID' AND room_id='$ROOM_ID'")"
+          test "$DB_SESSION" = "ACTIVE:true:true"
+          test "$(psql "$DATABASE_URL" -Atc "SELECT workload_id FROM workload_identities WHERE principal_id='$PRINCIPAL_ID' AND status='ACTIVE' AND last_seen_at IS NOT NULL")" = "$WORKLOAD_ID"
+          test "$(psql "$DATABASE_URL" -Atc "SELECT COUNT(*) FROM security_audit_events WHERE principal_id='$PRINCIPAL_ID' AND action='auth.session.created' AND outcome='SUCCESS' AND metadata->>'workload_id'='$WORKLOAD_ID'")" = "1"
+
+          STAGE="local-session-authentication"
+          AUTH_ME_STATUS="$(curl --silent --show-error -o auth-me.json -w '%{http_code}' \
+            -H "Authorization: Bearer $LOCAL_TOKEN" http://127.0.0.1:8081/auth/me)"
+          test "$AUTH_ME_STATUS" = "200"
+          AUTH_ME="$(cat auth-me.json)"
+          test "$(echo "$AUTH_ME" | jq -r .session_id)" = "$SESSION_ID"
+          test "$(echo "$AUTH_ME" | jq -r .issuer)" = "$ISSUER"
+          test "$(echo "$AUTH_ME" | jq -r .subject)" = "$TOKEN_SUB"
+
+          # Authentication is not authorization: room.read was deliberately not granted.
+          STAGE="permission-denial-check"
+          READ_STATUS="$(curl --silent --show-error -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $LOCAL_TOKEN" http://127.0.0.1:8081/team-room/me)"
+          test "$READ_STATUS" = "403"
+          test "$(psql "$DATABASE_URL" -Atc "SELECT COUNT(*) FROM security_audit_events WHERE principal_id='$PRINCIPAL_ID' AND action='authorization.denied' AND outcome='DENIED' AND reason_code='permission_not_granted'")" = "1"
+
+          STAGE="postgres-admission"
+          JOIN_STATUS="$(curl --silent --show-error -o admission.json -w '%{http_code}' \
+            -X POST -H "Authorization: Bearer $LOCAL_TOKEN" \
+            "http://127.0.0.1:8081/team-room/$ROOM_ID/join")"
+          test "$JOIN_STATUS" = "200"
+          test "$(jq -r .session_id admission.json)" = "$SESSION_ID"
+          test "$(jq -r .principal_id admission.json)" = "$PRINCIPAL_ID"
+          test "$(jq -r .active_ai_count admission.json)" = "1"
+          test "$(psql "$DATABASE_URL" -Atc "SELECT COUNT(*) FROM room_memberships WHERE room_id='$ROOM_ID' AND principal_id='$PRINCIPAL_ID' AND session_id='$SESSION_ID' AND status='ACTIVE'")" = "1"
+          test "$(psql "$DATABASE_URL" -Atc "SELECT COUNT(*) FROM audit_events WHERE room_id='$ROOM_ID' AND actor_principal_id='$PRINCIPAL_ID' AND action='participant.admitted' AND outcome='SUCCESS'")" = "1"
+
+          STAGE="replay-rejection"
+          REPLAY_STATUS="$(curl --silent --show-error -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' -X POST http://127.0.0.1:8081/auth/exchange -d "$EXCHANGE_BODY")"
+          test "$REPLAY_STATUS" = "401"
+          test "$(psql "$DATABASE_URL" -Atc "SELECT COUNT(*) FROM security_audit_events WHERE room_id='$ROOM_ID' AND action='auth.exchange.denied' AND reason_code='assertion_replay'")" = "1"
+
+          STAGE="log-redaction-check"
+          # The service log must not contain either bearer token or the client secret.
+          if grep -F -e "$ACCESS_TOKEN" -e "$LOCAL_TOKEN" -e "$CLIENT_SECRET" -e "$ADMIN_TOKEN" ai-team-room-service.log; then
+            echo "Credential material found in service log" >&2
+            exit 1
+          fi
+          if grep -Eq 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' ai-team-room-service.log; then
+            echo "JWT-like compact credential found in service log" >&2
+            exit 1
+          fi
+          echo "PASS: live Keycloak JWT -> /auth/exchange -> registered workload -> opaque session digest -> permission check -> PostgreSQL room admission"
+          echo "PASS: real issuer/subject/session/workload binding, expiry, denied room.read, admission audit, and replay rejection"

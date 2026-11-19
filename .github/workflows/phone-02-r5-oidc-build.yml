@@ -1,0 +1,201 @@
+name: Phone-02 R5 OIDC Credential Store and Client Credentials E2E (retry 2)
+
+on:
+  push:
+    branches: [mission/phone-02-p238-b-oidc]
+    paths:
+      - 'services/phone-supervisor/oidc-r5/**'
+      - 'services/phone-supervisor/phone_supervisor.cpp'
+      - 'services/phone-supervisor/SupervisorCredentialStoreR5.*'
+      - 'services/phone-supervisor/SupervisorCredentialProvisioningR5.*'
+      - 'services/phone-supervisor/RealSupervisorTeamRoomHttpsAdapter.*'
+      - 'services/phone-supervisor/phone_supervisor_rpc.idl'
+      - 'services/phone-supervisor/phone_supervisor_client.cpp'
+      - 'scripts/phone-02-r5-oidc-e2e.ps1'
+      - '.github/workflows/phone-02-r5-oidc-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: phone02-r5-oidc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build and test in-process OIDC DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = 'services/phone-supervisor/oidc-r5/Cargo.toml'
+          cargo test --manifest-path $manifest --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'R5_RUST_TESTS_FAILED' }
+          cargo build --release --manifest-path $manifest --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'R5_RUST_DLL_BUILD_FAILED' }
+          $dll = 'services/phone-supervisor/oidc-r5/target/x86_64-pc-windows-msvc/release/phone_supervisor_oidc_r5.dll'
+          if (-not (Test-Path $dll)) { throw 'R5_OIDC_DLL_MISSING' }
+          dumpbin /exports $dll | Tee-Object -FilePath "$env:RUNNER_TEMP/r5-oidc-exports.txt"
+          $exports = Get-Content "$env:RUNNER_TEMP/r5-oidc-exports.txt" -Raw
+          foreach ($name in @('r5_acquire_token','r5_probe_wrong_secret','r5_probe_wrong_client','r5_probe_wrong_scope','r5_probe_bad_endpoint','r5_probe_malformed_response','r5_probe_tls_failure','r5_probe_unavailable')) {
+            if ($exports -notmatch [regex]::Escape($name)) { throw "R5_EXPORT_MISSING_$name" }
+          }
+          Copy-Item $dll "$env:RUNNER_TEMP/phone_supervisor_oidc_r5.dll"
+          Get-FileHash "$env:RUNNER_TEMP/phone_supervisor_oidc_r5.dll" -Algorithm SHA256 | Format-List | Out-File "$env:RUNNER_TEMP/r5-oidc-dll-sha256.txt"
+      - name: Compile Supervisor with R5 store and provisioning modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = (Resolve-Path 'services/phone-supervisor').Path
+          $build = Join-Path $env:RUNNER_TEMP 'r5-build'
+          New-Item -ItemType Directory -Force -Path $build | Out-Null
+          $idl = Join-Path $src 'phone_supervisor_rpc.idl'
+          $rpcH = Join-Path $build 'phone_supervisor_rpc.h'
+          $rpcI = Join-Path $build 'phone_supervisor_rpc_i.c'
+          $rpcC = Join-Path $build 'phone_supervisor_rpc_c.c'
+          $rpcS = Join-Path $build 'phone_supervisor_rpc_s.c'
+          midl /nologo /env x64 /h $rpcH /iid $rpcI /cstub $rpcC /sstub $rpcS $idl
+          if ($LASTEXITCODE -ne 0) { throw 'R5_MIDL_FAILED' }
+          $exe = Join-Path $build 'phone_supervisor.exe'
+          $sources = @((Join-Path $src 'phone_supervisor.cpp'),(Join-Path $src 'RealSupervisorTeamRoomHttpsAdapter.cpp'),(Join-Path $src 'SupervisorCredentialStoreR5.cpp'),(Join-Path $src 'SupervisorCredentialProvisioningR5.cpp'),$rpcS)
+          & cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "/I$build" "/I$src" $sources "/Fe:$exe" /link advapi32.lib rpcrt4.lib bcrypt.lib userenv.lib shell32.lib ole32.lib winhttp.lib ncrypt.lib
+          if ($LASTEXITCODE -ne 0) { throw 'R5_SUPERVISOR_COMPILE_FAILED' }
+          Copy-Item $exe "$env:RUNNER_TEMP/phone_supervisor.exe"
+          Get-FileHash "$env:RUNNER_TEMP/phone_supervisor.exe" -Algorithm SHA256 | Format-List | Out-File "$env:RUNNER_TEMP/r5-supervisor-sha256.txt"
+          $clientExe = Join-Path $build 'phone_supervisor_client.exe'
+          $clientSources = @((Join-Path $src 'phone_supervisor_client.cpp'),$rpcC)
+          & cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "/I$build" "/I$src" $clientSources "/Fe:$clientExe" /link advapi32.lib rpcrt4.lib bcrypt.lib ole32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'R5_CLIENT_COMPILE_FAILED' }
+          Copy-Item $clientExe "$env:RUNNER_TEMP/phone_supervisor_client.exe"
+          Get-FileHash "$env:RUNNER_TEMP/phone_supervisor_client.exe" -Algorithm SHA256 | Format-List | Out-File "$env:RUNNER_TEMP/r5-client-sha256.txt"
+      - name: Scan build logs and binaries for secret material
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @("$env:RUNNER_TEMP/r5-oidc-exports.txt","$env:RUNNER_TEMP/r5-oidc-dll-sha256.txt","$env:RUNNER_TEMP/r5-supervisor-sha256.txt","$env:RUNNER_TEMP/r5-client-sha256.txt")
+          $text = ($files | Where-Object { Test-Path $_ } | ForEach-Object { Get-Content $_ -Raw }) -join "`n"
+          if ($text -match '(?i)eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}|client_secret\s*=\s*[^<\s]{12,}|access_token\s*=\s*[^<\s]{12,}') { throw 'R5_BUILD_SECRET_SCAN_FAILED' }
+          'R5_BUILD_SECRET_SCAN=PASS' | Out-File "$env:RUNNER_TEMP/r5-build-verdict.txt"
+          'R5_RUST_TESTS=PASS' | Add-Content "$env:RUNNER_TEMP/r5-build-verdict.txt"
+          'R5_OIDC_DLL=PASS' | Add-Content "$env:RUNNER_TEMP/r5-build-verdict.txt"
+          'R5_SUPERVISOR_COMPILE=PASS' | Add-Content "$env:RUNNER_TEMP/r5-build-verdict.txt"
+      - name: Validate R5 PowerShell harness syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $null = [scriptblock]::Create((Get-Content 'scripts/phone-02-r5-oidc-e2e.ps1' -Raw))
+          'R5_POWERSHELL_SYNTAX=PASS' | Out-File "$env:RUNNER_TEMP/r5-powershell-syntax.txt"
+      - name: Verify prior real AppContainer evidence
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+          $run = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/44192932167"
+          $artifacts = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/44192932167/artifacts"
+          $artifact = $artifacts.artifacts | Where-Object { $_.id -eq 14376783563 }
+          if ($run.conclusion -ne 'success' -or -not $artifact -or $artifact.expired -or $artifact.digest -ne 'sha256:f6d98fd7c7370f1dcb41010c7db9d549c07f13743dd43e08589d4d93762e730b') { throw 'R4_REAL_APPCONTAINER_EVIDENCE_INVALID' }
+          @('R4_APP_CONTAINER_EVIDENCE=PASS','R4_RUN_ID=44192932167','R4_ARTIFACT_ID=14376783563','R4_ARTIFACT_SHA256=f6d98fd7c7370f1dcb41010c7db9d549c07f13743dd43e08589d4d93762e730b') | Out-File "$env:RUNNER_TEMP/r4-appcontainer-evidence.txt"
+      - name: Static identity and R5 security gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $provision = Get-Content 'services/phone-supervisor/SupervisorCredentialProvisioningR5.cpp' -Raw
+          $supervisor = Get-Content 'services/phone-supervisor/phone_supervisor.cpp' -Raw
+          $harness = Get-Content 'scripts/phone-02-r5-oidc-e2e.ps1' -Raw
+          $workflow = Get-Content '.github/workflows/phone-02-r5-oidc-build.yml' -Raw
+          $rpcIdl = Get-Content 'services/phone-supervisor/phone_supervisor_rpc.idl' -Raw
+          $rpcClient = Get-Content 'services/phone-supervisor/phone_supervisor_client.cpp' -Raw
+          if ($provision -notmatch 'BOOL reverted\s*=\s*RevertToSelf\(\)' -or $provision -notmatch 'PROVISION_PIPE_REVERT_FAILED_ERROR_' -or $provision -notmatch 'DisconnectNamedPipe\(pipe\);\s*break;') { throw 'F1_REVERTTOSELF_FAIL_CLOSED_STATIC_FAIL' }
+          if ($supervisor -notmatch 'SUPERVISOR_OIDC_TOKEN_EXCHANGE=PASS' -or $supervisor -notmatch 'RPC_AUTH_EXCHANGE_CALLED=NO') { throw 'F2_OIDC_RPC_MARKERS_STATIC_FAIL' }
+          if ($harness -notmatch 'KEYCLOAK_HTTP_LISTENER_OWNER_UNKNOWN' -or $harness -notmatch 'KEYCLOAK_HTTP_DISABLED=PASS' -or $harness -notmatch 'httpListenerOwnerUnknown') { throw 'F3_UNKNOWN_HTTP_LISTENER_FAIL_CLOSED_STATIC_FAIL' }
+          foreach ($pattern in @('RPC_C_AUTHN_WINNT','RPC_C_AUTHN_LEVEL_PKT_PRIVACY','TokenIsAppContainer','TokenAppContainerSid','APPCONTAINER_SID_PIN_MISMATCH','PACKAGE_FULL_PIN_MISMATCH','SameIdentity\(','nonceUsed','ConstantEqual\(','RPC_CLIENT_APPCONTAINER_SID','RPC_CLIENT_USER_SID')) {
+            if ($supervisor -notmatch $pattern) { throw "IDENTITY_BINDING_STATIC_MISSING_$pattern" }
+          }
+          if ($workflow -notmatch 'if: false # Disabled until identity-binding and security gates are explicitly approved\.' -or $workflow -notmatch 'if: false # Runtime integration is disabled; do not manufacture an R5 verdict\.') { throw 'R5_RUNTIME_GUARD_MISSING' }
+          if ($rpcIdl -notmatch 'void TeamRoomScenario' -or $rpcIdl -match 'void TeamRoomScenario\([^)]*(token|secret|bearer|operator_key|ai_phone_id|credential)' -or $rpcClient -match 'OIDC_ACCESS_TOKEN|CLIENT_SECRET|ENDPOINT_CREDENTIAL|OPERATOR_KEY|AI_PHONE_ID') { throw 'OIDC_RPC_SECRET_OR_CALLER_ID_BOUNDARY_STATIC_FAIL' }
+          if ($supervisor -notmatch 'TEAM_ROOM_AUTH_EXCHANGE_CALLED=NO' -or $supervisor -notmatch 'realTeamRoomSessionAuthenticated=false' -or $supervisor -notmatch 'RPC_AUTH_EXCHANGE_CALLED=NO') { throw 'OIDC_RPC_BINDING_NOT_IMPLEMENTED_MARKERS_MISSING' }
+          @('F1_REVERTTOSELF=PASS','F2_OIDC_RPC_MARKERS=PASS','F3_HTTP_OWNER_FAIL_CLOSED=PASS','IDENTITY_BINDING_STATIC=PASS','OIDC_RPC_SECRET_BOUNDARY_STATIC=PASS','OIDC_RPC_BINDING=NOT_IMPLEMENTED','R5_RUNTIME_GUARD=PASS') | Out-File "$env:RUNNER_TEMP/r5-static-gates.txt"
+      - name: Run real R5 HTTPS Keycloak client_credentials and DPAPI-NG integration
+        if: false # Disabled until identity-binding and security gates are explicitly approved.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & 'scripts/phone-02-r5-oidc-e2e.ps1' -SupervisorExe "$env:RUNNER_TEMP/phone_supervisor.exe" -OidcDll "$env:RUNNER_TEMP/phone_supervisor_oidc_r5.dll" -ClientExe "$env:RUNNER_TEMP/phone_supervisor_client.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'R5_RUNTIME_E2E_FAILED' }
+      - name: Scan sanitized evidence and set final R5 verdict
+        if: false # Runtime integration is disabled; do not manufacture an R5 verdict.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = Join-Path $env:RUNNER_TEMP 'phone02-r5-evidence'
+          $summaryPath = Join-Path $evidence 'r5-summary.txt'
+          if (-not (Test-Path $summaryPath)) { throw 'R5_SUMMARY_MISSING' }
+          $summary = Get-Content $summaryPath -Raw
+          $serviceLog = Join-Path $evidence 'supervisor-r5.log'
+          $clientLog = Join-Path $evidence 'supervisor-client-common.log'
+          if ($summary -notmatch 'R5_RUNTIME_VERDICT=PASS' -or $summary -notmatch 'SECRET_SCAN=PASS' -or $summary -notmatch 'CLEANUP=PASS' -or $summary -notmatch 'R4_APP_CONTAINER_EVIDENCE=PASS') { throw 'R5_RUNTIME_OR_SECRET_OR_CLEANUP_MARKER_MISSING' }
+          if (-not (Test-Path "$env:RUNNER_TEMP/r4-appcontainer-evidence.txt") -or -not (Test-Path "$env:RUNNER_TEMP/r5-powershell-syntax.txt")) { throw 'R4_OR_R5_HARNESS_EVIDENCE_MISSING' }
+          if (-not (Test-Path $serviceLog) -or -not (Test-Path $clientLog)) { throw 'R5_SANITIZED_LOGS_MISSING' }
+          $svc = Get-Content $serviceLog -Raw
+          $cli = Get-Content $clientLog -Raw
+          foreach ($marker in @('CREDENTIAL_STORE_INTEGRATED=PASS','LOCAL_SERVICE=PASS','SERVICE_SID=PASS','CREDENTIAL_PROVISIONED=PASS','DPAPI_NG_SERVICE_SID_BOUND=PASS','CREDENTIAL_PROVISIONING_ADMIN_ONLY=PASS','CREDENTIAL_STORE_READ=PASS','CREDENTIAL_PROTECTED=PASS','OIDC_SECRET_BUFFER_ZEROED=PASS','KEYCLOAK_HTTPS=PASS','OIDC_DISCOVERY=PASS','OIDC_ISSUER_VALID=PASS','CLIENT_CREDENTIALS=PASS','TOKEN_ACQUIRED=PASS','TOKEN_SIGNATURE=PASS','TOKEN_ISSUER=PASS','TOKEN_AUDIENCE=PASS','TOKEN_SCOPE=PASS','TOKEN_EXPIRY=PASS','TOKEN_MEMORY_ONLY=PASS','NEGATIVE_WRONG_SECRET=PASS','NEGATIVE_WRONG_CLIENT=PASS','NEGATIVE_INVALID_SCOPE=PASS','NEGATIVE_BAD_ENDPOINT=PASS','NEGATIVE_TLS=PASS','NEGATIVE_KEYCLOAK_UNAVAILABLE=PASS','NEGATIVE_MALFORMED_RESPONSE=PASS','KEYCLOAK_HTTP_LISTENER_OWNER_UNKNOWN=PASS','SUPERVISOR_OIDC_TOKEN_EXCHANGE=PASS','RPC_AUTH_EXCHANGE_CALLED=NO','TOKEN_MEMORY_ZEROED=PASS','CREDENTIAL_REMOVE=PASS','CLEANUP=PASS','R5_VERDICT=PASS')) {
+            if (-not $svc.Contains($marker)) { throw "R5_SERVICE_MARKER_MISSING_$marker" }
+          }
+          foreach ($marker in @('COMMON_PROCESS_REJECT=PASS','COMMON_PROCESS_TEAM_ROOM_REJECT=PASS')) {
+            if (-not $cli.Contains($marker)) { throw "R5_CLIENT_MARKER_MISSING_$marker" }
+          }
+          if ($summary -notmatch 'RPC_TOKEN_EXPOSURE=PASS' -or $summary -notmatch 'CLIENT_SECRET_NOT_IN_CLI_ENV_FILE_RPC=PASS' -or $summary -notmatch 'TOKEN_LOG_EXPOSURE=PASS') { throw 'R5_ISOLATION_MARKERS_MISSING' }
+          $files = Get-ChildItem $evidence -File
+          $allText = ($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
+          if ($allText -match '(?i)eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|client_secret\s*=\s*[^<\s]{12,}|access_token\s*=\s*[^<\s]{12,}') { throw 'R5_ARTIFACT_SECRET_SCAN_FAILED' }
+          $lines = Get-Content $summaryPath | Where-Object { $_ -notmatch '^ARTIFACT_SCAN=' -and $_ -notmatch '^R5_VERDICT=' -and $_ -notmatch '^R4_RUN_ID=' -and $_ -notmatch '^R4_ARTIFACT_ID=' -and $_ -notmatch '^R4_ARTIFACT_SHA256=' }
+          $lines += 'R4_RUN_ID=44192932167'
+          $lines += 'R4_ARTIFACT_ID=14376783563'
+          $lines += 'R4_ARTIFACT_SHA256=f6d98fd7c7370f1dcb41010c7db9d549c07f13743dd43e08589d4d93762e730b'
+          $lines += 'ARTIFACT_SCAN=PASS'
+          $lines += 'R5_VERDICT=PASS'
+          $lines | Set-Content $summaryPath -Encoding utf8
+          $hashes = Get-ChildItem $evidence -File | Where-Object { $_.Name -ne 'SHA256SUMS' } | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name }
+          $hashes | Set-Content (Join-Path $evidence 'SHA256SUMS') -Encoding ascii
+          'R5_ARTIFACT_SCAN=PASS' | Out-File "$env:RUNNER_TEMP/r5-artifact-scan.txt"
+          'R5_VERDICT=PASS' | Out-File "$env:RUNNER_TEMP/r5-final-verdict.txt"
+      - uses: actions/upload-artifact@v4
+        id: upload-r5
+        if: always()
+        with:
+          name: phone02-r5-oidc-e2e-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/phone02-r5-evidence/**
+            ${{ runner.temp }}/r5-oidc-exports.txt
+            ${{ runner.temp }}/r5-oidc-dll-sha256.txt
+            ${{ runner.temp }}/r5-supervisor-sha256.txt
+            ${{ runner.temp }}/r5-client-sha256.txt
+            ${{ runner.temp }}/r5-build-verdict.txt
+            ${{ runner.temp }}/r5-powershell-syntax.txt
+            ${{ runner.temp }}/r5-static-gates.txt
+            ${{ runner.temp }}/r4-appcontainer-evidence.txt
+            ${{ runner.temp }}/r5-artifact-scan.txt
+            ${{ runner.temp }}/r5-final-verdict.txt
+          if-no-files-found: warn
+      - name: Record R5 artifact ID and digest
+        if: always()
+        shell: pwsh
+        env:
+          ARTIFACT_ID: ${{ steps.upload-r5.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload-r5.outputs.artifact-digest }}
+        run: |
+          Write-Host "R5_ARTIFACT_ID=$env:ARTIFACT_ID"
+          Write-Host "R5_ARTIFACT_DIGEST=$env:ARTIFACT_DIGEST"
