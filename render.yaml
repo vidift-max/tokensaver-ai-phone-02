@@ -37,12 +37,16 @@ services:
       - key: AI_PHONE_SYSTEM_PROMPT
         sync: false
 
-  - type: worker
+  # Render Free does not support Background Worker instances.
+  # The worker is therefore exposed as a Web Service so it can run the
+  # same persistent polling loop while the service is awake.
+  - type: web
     name: ai-phone-02-worker
     runtime: docker
     plan: free
     dockerfilePath: ./services/ai-phone-02-worker/Dockerfile
     dockerContext: .
+    healthCheckPath: /health/live
     envVars:
       - key: AI_PHONE_API_URL
         sync: false
@@ -60,6 +64,8 @@ services:
         sync: false
       - key: AI_PHONE_POLL_MS
         value: "2000"
+      - key: AI_PHONE_HEARTBEAT_MS
+        value: "30000"
 
 databases:
   - name: ai-phone-02-postgres
