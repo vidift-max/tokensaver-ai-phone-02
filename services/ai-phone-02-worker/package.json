@@ -1,0 +1,1 @@
+{"name":"ai-phone-02-worker","private":true,"type":"module","scripts":{"start":"node worker.mjs"}}
