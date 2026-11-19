@@ -35,28 +35,40 @@ let lastHeartbeat = 0;
 let pollTimer = null;
 let ticking = false;
 let stopping = false;
+let nextBindingRetryAt = 0;
 
 async function refreshBinding() {
+  if (Date.now() < nextBindingRetryAt) {
+    const error = new Error("Phone-02 binding retry is in backoff");
+    error.code = "OIDC_RETRY_BACKOFF";
+    throw error;
+  }
   requireRuntimeConfig();
-  if (!client.sessionToken) {
-    await client.exchangeOidcSession();
-    await client.joinRoom();
-  }
-  let snapshot;
   try {
-    snapshot = await client.getSnapshot();
-  } catch (error) {
-    if (error.code !== "AUTHORIZATION_LOST" || !client.oidcIssuer) throw error;
-    await client.exchangeOidcSession();
-    snapshot = await client.getSnapshot();
-  }
-  endpointFence = snapshot?.attachment?.endpoint_fence;
-  if (!Number.isInteger(endpointFence)) {
-    await client.attach();
-    snapshot = await client.getSnapshot();
+    if (!client.sessionToken) {
+      await client.exchangeOidcSession();
+      await client.joinRoom();
+    }
+    let snapshot;
+    try {
+      snapshot = await client.getSnapshot();
+    } catch (error) {
+      if (error.code !== "AUTHORIZATION_LOST" || !client.oidcIssuer) throw error;
+      await client.exchangeOidcSession();
+      snapshot = await client.getSnapshot();
+    }
     endpointFence = snapshot?.attachment?.endpoint_fence;
+    if (!Number.isInteger(endpointFence)) {
+      await client.attach();
+      snapshot = await client.getSnapshot();
+      endpointFence = snapshot?.attachment?.endpoint_fence;
+    }
+    if (!Number.isInteger(endpointFence)) throw new Error("Phone-02 endpoint is not currently attached");
+    nextBindingRetryAt = 0;
+  } catch (error) {
+    nextBindingRetryAt = Date.now() + (error.status === 429 ? 60000 : 15000);
+    throw error;
   }
-  if (!Number.isInteger(endpointFence)) throw new Error("Phone-02 endpoint is not currently attached");
 }
 
 async function ensureHeartbeat(force = false) {
@@ -71,6 +83,7 @@ async function ensureHeartbeat(force = false) {
 
 async function tick() {
   if (stopping || ticking || !configurationReady()) return;
+  if (!Number.isInteger(endpointFence) && Date.now() < nextBindingRetryAt) return;
   requireRuntimeConfig();
   ticking = true;
   try {
@@ -115,13 +128,14 @@ async function guardedTick() {
   try {
     await tick();
   } catch (error) {
-    console.error("worker tick failed", error.code || error.message);
+    console.error("worker tick failed", JSON.stringify({code:error.code||null,status:error.status||null,message:error.message}));
+    if (["OIDC_AUTH_FAILED","OIDC_EXCHANGE_FAILED","OIDC_RETRY_BACKOFF"].includes(error.code)) return;
     try {
       await ensureHeartbeat(true);
     } catch (heartbeatError) {
       console.error(
         "worker heartbeat recovery failed",
-        heartbeatError.code || heartbeatError.message
+        JSON.stringify({code:heartbeatError.code||null,status:heartbeatError.status||null,message:heartbeatError.message})
       );
     }
   }
