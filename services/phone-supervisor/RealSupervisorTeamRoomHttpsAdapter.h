@@ -51,6 +51,7 @@ private:
     std::wstring endpoint_;
     std::string roomId_;
     std::string teamRoomToken_;
+    std::string endpointCredential_;
     TeamRoomAttachment attachment_;
 };
 
