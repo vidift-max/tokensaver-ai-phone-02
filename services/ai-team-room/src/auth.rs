@@ -363,9 +363,9 @@ async fn verify_oidc_token(config: &OidcConfig, token: &str) -> Result<OidcClaim
     let now = Utc::now().timestamp() as usize;
     let exact_audience = match &claims.aud {
         Value::String(value) => value == &config.audience,
-        Value::Array(values) => {
-            values.len() == 1 && values[0].as_str() == Some(config.audience.as_str())
-        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value.as_str() == Some(config.audience.as_str()))
         _ => false,
     };
     if claims.iss != config.issuer
@@ -1018,7 +1018,7 @@ rYCbrUTET0soLkbXAVaf4NZm
         let valid_claims = json!({
             "iss": config.issuer,
             "sub": "agent-subject",
-            "aud": config.audience,
+            "aud": [config.audience, "account"],
             "exp": now + 180,
             "nbf": now.saturating_sub(1),
             "iat": now,
