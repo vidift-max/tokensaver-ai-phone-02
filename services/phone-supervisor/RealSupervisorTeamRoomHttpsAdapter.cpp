@@ -669,7 +669,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::attach(
     std::string phoneAttachment;
     if (!request(
             L"POST", L"/ai-phone/attach", attachBody, phoneAttachment,
-            status, reason, &binding.endpoint_credential) ||
+            &binding.endpoint_credential, status, reason) ||
         status != 201) {
         return false;
     }
@@ -717,7 +717,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::heartbeat(
         "{\"endpoint_fence\":" + std::to_string(attachment.endpoint_fence) + "}";
     if (endpointCredential_.empty() ||
         !request(L"POST", L"/ai-phone/heartbeat", phoneBody, response,
-                 status, reason, &endpointCredential_) ||
+                 &endpointCredential_, status, reason) ||
         status != 200) {
         return false;
     }
@@ -748,7 +748,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::reconnect(
         "{\"endpoint_id\":\"" + attachment.endpoint_id +
         "\",\"endpoint_type\":\"MOBILE\",\"metadata\":{}}";
     if (!request(L"POST", L"/ai-phone/reconnect", body, response,
-                 status, reason, &endpointCredential_) || status != 200) {
+                 &endpointCredential_, status, reason) || status != 200) {
         return false;
     }
     std::string attachmentId;
@@ -780,7 +780,7 @@ bool RealSupervisorTeamRoomHttpsAdapter::detach(
     if (endpointCredential_.empty() ||
         !request(L"POST", L"/ai-phone/detach",
                  "{\"endpoint_fence\":" + std::to_string(attachment.endpoint_fence) + "}",
-                 phoneResponse, status, reason, &endpointCredential_) ||
+                 phoneResponse, &endpointCredential_, status, reason) ||
         status != 204) {
         return false;
     }
