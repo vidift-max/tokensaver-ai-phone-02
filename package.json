@@ -1,0 +1,37 @@
+{
+  "name": "tokensaver-ai",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test:missions": "node --test tests/mission-runner.test.mjs",
+    "test:phone-runtime": "node --test tests/phone-runtime-client.test.mjs",
+    "test:phone-worker": "node --test tests/phone-runtime-worker.test.mjs",
+    "test:phone-store": "node --test tests/phone-result-store.test.mjs",
+    "test": "npm run test:missions && npm run test:phone-runtime && npm run test:phone-worker && npm run test:phone-store && npm run test:phone-key-provider && npm run test:phone-windows-acl && npm run test:phone-envelope && npm run test:phone-authorizer && npm run test:phone-bootstrap && npm run test:release-package",
+    "test:phone-envelope": "node --test tests/phone-mission-envelope.test.mjs",
+    "test:phone-authorizer": "node --test tests/phone-mission-authorizer.test.mjs",
+    "test:phone-bootstrap": "node --test tests/create-phone-runtime-worker.test.mjs",
+    "test:phone-key-provider": "node --test tests/phone-key-provider.test.mjs",
+    "test:phone-windows-acl": "node --test tests/phone-windows-acl.test.mjs",
+    "test:release-package": "node --test tests/release-package/*.test.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@napi-rs/keyring": "^2.1.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}
