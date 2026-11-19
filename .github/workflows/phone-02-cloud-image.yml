@@ -1,0 +1,20 @@
+name: AI-PHONE-02 Cloud Image
+
+on:
+  push:
+    branches:
+      - mission/remote-contact-tablet-first
+  pull_request:
+    branches:
+      - v2-saas-alpha
+      - mission/remote-contact-tablet-first
+
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build hosted tablet + Team Room image
+        run: docker build -f services/ai-team-room/Dockerfile -t ai-phone-02-team-room:ci .
+      - name: Verify image exists
+        run: docker image inspect ai-phone-02-team-room:ci >/dev/null
