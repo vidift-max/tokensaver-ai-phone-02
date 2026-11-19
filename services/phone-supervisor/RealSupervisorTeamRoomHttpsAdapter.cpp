@@ -336,7 +336,6 @@ bool RealSupervisorTeamRoomHttpsAdapter::request(
     // Individual API paths are selected by the adapter and are never accepted
     // from untrusted input.
     URL_COMPONENTS components{};
-    std::wstring validation;
     {
         URL_COMPONENTS base{};
         base.dwStructSize = sizeof(base);
