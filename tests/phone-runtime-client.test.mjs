@@ -57,3 +57,9 @@ test("sends idempotent JSON messages without inventing an executor response", as
     content:{kind:"mission",text:"Execute authorized work"}
   });
 });
+
+test("clears a rejected session token so the worker must obtain a fresh OIDC session", async () => {
+  const client = new PhoneRuntimeClient(config, async () => response(401, {error:"session_expired"}));
+  await assert.rejects(() => client.poll(), e => e.code === "AUTHORIZATION_LOST" && e.status === 401);
+  assert.equal(client.sessionToken, "");
+});
