@@ -26,9 +26,10 @@ type SpeechWindow = Window & {
 };
 
 export default function TeamRoom() {
-  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8081");
-  const [roomId, setRoomId] = useState("");
-  const [token, setToken] = useState("");
+  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem("phone02-api-url") || import.meta.env.VITE_TEAM_ROOM_API_URL || "http://127.0.0.1:8081");
+  const [roomId, setRoomId] = useState(() => localStorage.getItem("phone02-room-id") || import.meta.env.VITE_TEAM_ROOM_ROOM_ID || "");
+  const [token, setToken] = useState(() => sessionStorage.getItem("phone02-session-token") || "");
+  const [autoReconnect, setAutoReconnect] = useState(() => localStorage.getItem("phone02-auto-reconnect") !== "false");
   const [connected, setConnected] = useState(false);
   const [connection, setConnection] = useState("DESCONECTADO");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -40,6 +41,15 @@ export default function TeamRoom() {
   const socketRef = useRef<WebSocket | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const heartbeatTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem("phone02-api-url", apiUrl);
+    localStorage.setItem("phone02-room-id", roomId);
+    localStorage.setItem("phone02-auto-reconnect", String(autoReconnect));
+    if (token) sessionStorage.setItem("phone02-session-token", token);
+    else sessionStorage.removeItem("phone02-session-token");
+  }, [apiUrl, roomId, token, autoReconnect]);
 
   useEffect(() => {
     const speechWindow = window as SpeechWindow;
@@ -47,6 +57,7 @@ export default function TeamRoom() {
     return () => {
       recognitionRef.current?.stop();
       window.speechSynthesis?.cancel();
+      if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current);
     };
   }, []);
 
@@ -89,6 +100,18 @@ export default function TeamRoom() {
     let stopped = false;
     let retry = 0;
     let timer: number | undefined;
+    const heartbeat = async () => {
+      try {
+        await request("/team-room/heartbeat", { method: "POST", body: "{}" });
+      } catch {
+        setConnection("SESSÃO EXPIRADA");
+        setConnected(false);
+        socketRef.current?.close();
+      }
+    };
+    void heartbeat();
+    heartbeatTimerRef.current = window.setInterval(() => void heartbeat(), 30000);
+
     const openSocket = async () => {
       try {
         const issued = await request("/team-room/" + roomId + "/ws-ticket", { method: "POST", body: "{}" });
@@ -105,13 +128,13 @@ export default function TeamRoom() {
         socket.onerror = () => setConnection("RECONectando");
         socket.onclose = () => {
           socketRef.current = null;
-          if (!stopped) {
+          if (!stopped && autoReconnect) {
             setConnection("RECONectando");
             timer = window.setTimeout(() => void openSocket(), Math.min(30000, 500 * Math.pow(2, retry++)));
           }
         };
       } catch {
-        if (!stopped) {
+        if (!stopped && autoReconnect) {
           setConnection("RECONectando");
           timer = window.setTimeout(() => void openSocket(), Math.min(30000, 1000 * Math.pow(2, retry++)));
         }
@@ -120,11 +143,15 @@ export default function TeamRoom() {
     void openSocket();
     return () => {
       stopped = true;
+      if (heartbeatTimerRef.current) {
+        window.clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = null;
+      }
       if (timer) window.clearTimeout(timer);
       socketRef.current?.close();
       socketRef.current = null;
     };
-  }, [connected, apiUrl, roomId, token, request, refresh]);
+  }, [connected, apiUrl, roomId, token, autoReconnect, request, refresh]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -215,6 +242,7 @@ export default function TeamRoom() {
         <label>ID da sala<input value={roomId} onChange={event => setRoomId(event.target.value)} placeholder="UUID da sala" /></label>
         <label>Token da sessão<input type="password" value={token} onChange={event => setToken(event.target.value)} placeholder="Token de acesso" /></label>
         <div className="simple-room-actions">
+          <label><input type="checkbox" checked={autoReconnect} onChange={e => setAutoReconnect(e.target.checked)} /> Reconectar automaticamente</label>
           {!connected
             ? <button className="primary" disabled={busy || !roomId.trim() || !token.trim()} onClick={() => void connect()}>{busy ? "Conectando..." : "Conectar"}</button>
             : <button onClick={leaveRoom}>Desconectar</button>}
@@ -258,7 +286,7 @@ export default function TeamRoom() {
         <small className="muted">{voiceSupported ? "Ditado e leitura em voz alta disponíveis conforme suporte/permissões do navegador." : "Voz nativa não detectada. O ditado do teclado Android pode ser usado no campo de texto."}</small>
       </div>
 
-      <p className="simple-room-disclaimer">O microfone nesta etapa transforma fala em texto e a leitura reproduz texto localmente. Ainda não é uma chamada de áudio em tempo real entre GPT-6 e o processo AI-PHONE-02.</p>
+      <p className="simple-room-disclaimer">Canal persistente com texto, WebSocket, heartbeat e reconexão. A voz nesta etapa é fala→texto e texto→fala no dispositivo. O contato real GPT-6 ↔ AI-PHONE-02 só é declarado quando o processo AI-PHONE-02 estiver instalado, autenticado e conectado; a interface não simula essa identidade.</p>
     </section>
   );
 }
