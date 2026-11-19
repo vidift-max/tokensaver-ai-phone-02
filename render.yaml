@@ -143,6 +143,8 @@ services:
           envVarKey: PHONE02_ENDPOINT_CREDENTIAL
       - key: AI_PHONE_ID
         value: 3bff9274-69b8-4b03-b14e-2b7935c3e366
+      - key: PHONE02_ENDPOINT_ID
+        value: fd4b56d2-b601-499d-957e-097902d0e183
       - key: TEAM_ROOM_ROOM_ID
         value: 9606a885-6f4a-4785-9529-2476ee41c2c1
       - key: AI_PHONE_EXECUTOR_URL
