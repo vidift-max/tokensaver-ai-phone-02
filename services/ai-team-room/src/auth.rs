@@ -1,0 +1,1092 @@
+use axum::http::HeaderMap;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use sqlx::{FromRow, PgPool};
+use std::{
+    collections::HashMap,
+    sync::OnceLock,
+    time::{Duration as StdDuration, Instant},
+};
+use tokio::sync::Mutex;
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub audience: String,
+    pub jwks_url: String,
+    pub require_discovery: bool,
+    pub expected_jwks_url: Option<String>,
+    pub allow_http_localhost: bool,
+}
+
+fn is_loopback_http_url(value: &str) -> bool {
+    let Some(authority_and_path) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = authority_and_path
+        .split(|ch| ch == '/' || ch == '?' || ch == '#')
+        .next()
+        .unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = authority.split(':').next().unwrap_or("");
+    host == "localhost" || host == "127.0.0.1"
+}
+
+impl OidcConfig {
+    pub fn from_env() -> Result<Self, String> {
+        let issuer = std::env::var("OIDC_ISSUER").map_err(|_| "OIDC_ISSUER is required")?;
+        let audience = std::env::var("OIDC_AUDIENCE").map_err(|_| "OIDC_AUDIENCE is required")?;
+        let expected_jwks_url = std::env::var("OIDC_JWKS_URL").ok();
+        let allow_http_localhost =
+            std::env::var("OIDC_ALLOW_HTTP_LOCALHOST").ok().as_deref() == Some("true");
+        let local_http = allow_http_localhost && is_loopback_http_url(&issuer);
+        if (!issuer.starts_with("https://") && !local_http)
+            || issuer.contains('#')
+            || issuer.contains('?')
+            || audience.trim().is_empty()
+        {
+            return Err("OIDC issuer must use HTTPS (HTTP is allowed only for explicit localhost development) and audience must be non-empty".into());
+        }
+        if expected_jwks_url
+            .as_ref()
+            .is_some_and(|url| !url.starts_with("https://"))
+        {
+            return Err("OIDC_JWKS_URL pin must use HTTPS".into());
+        }
+        Ok(Self {
+            issuer,
+            audience,
+            jwks_url: String::new(),
+            require_discovery: true,
+            expected_jwks_url,
+            allow_http_localhost,
+        })
+    }
+}
+
+type JsonCache = HashMap<String, (Instant, Value)>;
+static OIDC_CACHE: OnceLock<Mutex<JsonCache>> = OnceLock::new();
+
+async fn fetch_cached_json(url: &str, force_refresh: bool) -> Result<Value, AuthError> {
+    let cache = OIDC_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if !force_refresh {
+        if let Some((created, value)) = cache.lock().await.get(url).cloned() {
+            if created.elapsed() < StdDuration::from_secs(300) {
+                return Ok(value);
+            }
+        }
+    }
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| AuthError::ProviderUnavailable)?;
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|_| AuthError::ProviderUnavailable)?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|size| size > 1_048_576)
+    {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| AuthError::ProviderUnavailable)?;
+    if bytes.len() > 1_048_576 {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|_| AuthError::ProviderUnavailable)?;
+    cache
+        .lock()
+        .await
+        .insert(url.to_string(), (Instant::now(), value.clone()));
+    Ok(value)
+}
+
+async fn resolve_jwks_url(config: &OidcConfig, force_refresh: bool) -> Result<String, AuthError> {
+    if !config.require_discovery {
+        if !config.jwks_url.starts_with("https://")
+            && !(config.allow_http_localhost && is_loopback_http_url(&config.jwks_url))
+        {
+            return Err(AuthError::ProviderUnavailable);
+        }
+        return Ok(config.jwks_url.clone());
+    }
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        config.issuer.trim_end_matches('/')
+    );
+    let metadata = fetch_cached_json(&discovery_url, force_refresh).await?;
+    if metadata.get("issuer").and_then(Value::as_str) != Some(config.issuer.as_str()) {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    let algorithms = metadata
+        .get("id_token_signing_alg_values_supported")
+        .and_then(Value::as_array)
+        .ok_or(AuthError::ProviderUnavailable)?;
+    if !algorithms.iter().any(|v| v.as_str() == Some("RS256")) {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    // The development exception must use the same strict loopback parser as
+    // JWKS. Prefix checks would accept hosts such as localhost.attacker.example.
+    let secure_endpoint = |value: Option<&str>| {
+        value.is_some_and(|url| {
+            url.starts_with("https://")
+                || (config.allow_http_localhost && is_loopback_http_url(url))
+        })
+    };
+    if !secure_endpoint(metadata.get("token_endpoint").and_then(Value::as_str)) {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    if let Some(auth_endpoint) = metadata
+        .get("authorization_endpoint")
+        .and_then(Value::as_str)
+    {
+        if !secure_endpoint(Some(auth_endpoint)) {
+            return Err(AuthError::ProviderUnavailable);
+        }
+    }
+    let jwks_url = metadata
+        .get("jwks_uri")
+        .and_then(Value::as_str)
+        .filter(|url| {
+            url.starts_with("https://")
+                || (config.allow_http_localhost && is_loopback_http_url(url))
+        })
+        .ok_or(AuthError::ProviderUnavailable)?;
+    if config
+        .expected_jwks_url
+        .as_deref()
+        .is_some_and(|expected| expected != jwks_url)
+    {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    Ok(jwks_url.to_string())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthError {
+    #[error("credential rejected")]
+    Unauthorized,
+    #[error("identity is not registered or enabled")]
+    IdentityUnavailable,
+    #[error("permission denied")]
+    Forbidden,
+    #[error("room unavailable")]
+    RoomUnavailable,
+    #[error("database failure: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("identity provider unavailable")]
+    ProviderUnavailable,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OidcClaims {
+    iss: String,
+    sub: String,
+    aud: Value,
+    exp: usize,
+    #[serde(default)]
+    nbf: Option<usize>,
+    iat: usize,
+    jti: String,
+    #[serde(default)]
+    scope: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthenticatedIdentity {
+    pub tenant_id: Uuid,
+    pub participant_id: Uuid,
+    pub principal_id: Uuid,
+    pub session_id: Uuid,
+    pub execution_id: Uuid,
+    pub room_id: Uuid,
+    pub issuer: String,
+    pub subject: String,
+}
+
+#[derive(Serialize)]
+pub struct ExchangeResponse {
+    pub access_token: String,
+    pub token_type: &'static str,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub identity: AuthenticatedIdentity,
+}
+
+#[derive(FromRow)]
+struct RegisteredIdentity {
+    tenant_id: Uuid,
+    principal_id: Uuid,
+    participant_id: Uuid,
+    workload_id: Uuid,
+}
+
+#[derive(FromRow)]
+struct SessionIdentity {
+    tenant_id: Uuid,
+    participant_id: Uuid,
+    principal_id: Uuid,
+    session_id: Uuid,
+    execution_id: Uuid,
+    room_id: Uuid,
+    issuer: String,
+    subject: String,
+}
+
+async fn verify_oidc_token(config: &OidcConfig, token: &str) -> Result<OidcClaims, AuthError> {
+    if token.len() > 16_384 {
+        return Err(AuthError::Unauthorized);
+    }
+    let header = decode_header(token).map_err(|_| AuthError::Unauthorized)?;
+    if header.alg != Algorithm::RS256 {
+        return Err(AuthError::Unauthorized);
+    }
+    let kid = header
+        .kid
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(AuthError::Unauthorized)?;
+
+    // Discovery is anchored to the configured issuer; neither iss nor jwks_uri is
+    // accepted from the untrusted token. Unknown kid triggers one bounded refresh.
+    let jwks_url = resolve_jwks_url(config, false).await?;
+    let mut jwks = fetch_cached_json(&jwks_url, false).await?;
+    let has_kid = |value: &Value| {
+        value
+            .get("keys")
+            .and_then(Value::as_array)
+            .is_some_and(|keys| {
+                keys.iter().any(|key| {
+                    key.get("kid").and_then(Value::as_str) == Some(kid.as_str())
+                        && key.get("kty").and_then(Value::as_str) == Some("RSA")
+                        && key.get("alg").and_then(Value::as_str) == Some("RS256")
+                        && key
+                            .get("use")
+                            .and_then(Value::as_str)
+                            .map(|v| v == "sig")
+                            .unwrap_or(true)
+                        && key.get("n").and_then(Value::as_str).is_some()
+                        && key.get("e").and_then(Value::as_str).is_some()
+                })
+            })
+    };
+    if !has_kid(&jwks) {
+        let refreshed_url = resolve_jwks_url(config, true).await?;
+        jwks = fetch_cached_json(&refreshed_url, true).await?;
+    }
+    let keys = jwks
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or(AuthError::ProviderUnavailable)?;
+    if keys.len() > 128 {
+        return Err(AuthError::ProviderUnavailable);
+    }
+    let kid_count = keys
+        .iter()
+        .filter(|key| key.get("kid").and_then(Value::as_str) == Some(kid.as_str()))
+        .count();
+    if kid_count != 1 {
+        return Err(AuthError::Unauthorized);
+    }
+    let matching: Vec<&Value> = keys
+        .iter()
+        .filter(|key| {
+            key.get("kid").and_then(Value::as_str) == Some(kid.as_str())
+                && key.get("kty").and_then(Value::as_str) == Some("RSA")
+                && key.get("alg").and_then(Value::as_str) == Some("RS256")
+                && key
+                    .get("use")
+                    .and_then(Value::as_str)
+                    .map(|v| v == "sig")
+                    .unwrap_or(true)
+                && key
+                    .get("key_ops")
+                    .and_then(Value::as_array)
+                    .map(|ops| ops.iter().any(|op| op.as_str() == Some("verify")))
+                    .unwrap_or(true)
+        })
+        .collect();
+    if matching.len() != 1 {
+        return Err(AuthError::Unauthorized);
+    }
+    let jwk = matching[0];
+    let n = jwk
+        .get("n")
+        .and_then(Value::as_str)
+        .ok_or(AuthError::Unauthorized)?;
+    let e = jwk
+        .get("e")
+        .and_then(Value::as_str)
+        .ok_or(AuthError::Unauthorized)?;
+    let modulus = URL_SAFE_NO_PAD
+        .decode(n)
+        .map_err(|_| AuthError::Unauthorized)?;
+    let exponent = URL_SAFE_NO_PAD
+        .decode(e)
+        .map_err(|_| AuthError::Unauthorized)?;
+    if modulus.len() < 256 || exponent.as_slice() != &[1, 0, 1] {
+        return Err(AuthError::Unauthorized);
+    }
+    let key = DecodingKey::from_rsa_components(n, e).map_err(|_| AuthError::Unauthorized)?;
+
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_issuer(&[config.issuer.as_str()]);
+    validation.set_audience(&[config.audience.as_str()]);
+    validation.validate_exp = true;
+    validation.validate_nbf = true;
+    validation.leeway = 0;
+    let claims = decode::<OidcClaims>(token, &key, &validation)
+        .map_err(|_| AuthError::Unauthorized)?
+        .claims;
+    let now = Utc::now().timestamp() as usize;
+    let exact_audience = match &claims.aud {
+        Value::String(value) => value == &config.audience,
+        Value::Array(values) => {
+            values.len() == 1 && values[0].as_str() == Some(config.audience.as_str())
+        }
+        _ => false,
+    };
+    if claims.iss != config.issuer
+        || !exact_audience
+        || claims.sub.trim().is_empty()
+        || claims.sub.len() > 512
+        || claims.jti.trim().is_empty()
+        || claims.jti.len() > 256
+        || claims.iat > now.saturating_add(60)
+        || claims.iat >= claims.exp
+        || !claims
+            .scope
+            .split_ascii_whitespace()
+            .any(|s| s == "team_room:connect")
+    {
+        return Err(AuthError::Unauthorized);
+    }
+    Ok(claims)
+}
+
+pub async fn exchange_workload_token(
+    pool: &PgPool,
+    config: &OidcConfig,
+    room_id: Uuid,
+    external_token: &str,
+) -> Result<ExchangeResponse, AuthError> {
+    let claims = match verify_oidc_token(config, external_token).await {
+        Ok(claims) => claims,
+        Err(error) => {
+            let reason = if matches!(error, AuthError::ProviderUnavailable) {
+                "issuer_metadata_or_jwks_unavailable"
+            } else {
+                "credential_rejected"
+            };
+            let _ = sqlx::query("INSERT INTO security_audit_events (security_event_id, room_id, action, outcome, reason_code) VALUES ($1,$2,'auth.exchange.denied','DENIED',$3)")
+                .bind(Uuid::new_v4()).bind(room_id).bind(reason).execute(pool).await;
+            return Err(error);
+        }
+    };
+    let now = Utc::now();
+    let expires_at = std::cmp::min(
+        chrono::DateTime::<Utc>::from_timestamp(claims.exp as i64, 0)
+            .ok_or(AuthError::Unauthorized)?,
+        now + Duration::minutes(15),
+    );
+    if expires_at <= now {
+        return Err(AuthError::Unauthorized);
+    }
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM auth_token_replays WHERE expires_at <= NOW()")
+        .execute(&mut *tx)
+        .await?;
+    // A provider assertion is accepted once. Replaying the same jti cannot mint
+    // another local session, even when two exchanges race.
+    let replay = sqlx::query(
+        "INSERT INTO auth_token_replays (issuer, token_jti, expires_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"
+    ).bind(&claims.iss).bind(&claims.jti).bind(expires_at)
+        .execute(&mut *tx).await?;
+    if replay.rows_affected() != 1 {
+        sqlx::query("INSERT INTO security_audit_events (security_event_id, room_id, action, outcome, reason_code) VALUES ($1,$2,'auth.exchange.denied','DENIED','assertion_replay')")
+            .bind(Uuid::new_v4()).bind(room_id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        return Err(AuthError::Unauthorized);
+    }
+
+    let registered = sqlx::query_as::<_, RegisteredIdentity>(
+        r#"SELECT pr.tenant_id, pr.principal_id, p.participant_id, wi.workload_id
+           FROM principals pr
+           JOIN participants p ON p.tenant_id = pr.tenant_id AND p.principal_id = pr.principal_id
+           JOIN workload_identities wi ON wi.tenant_id = pr.tenant_id AND wi.principal_id = pr.principal_id
+                AND wi.issuer = pr.provider AND wi.subject = pr.external_subject AND wi.status = 'ACTIVE'
+           JOIN rooms r ON r.tenant_id = pr.tenant_id AND r.room_id = $3 AND r.status = 'ACTIVE'
+           WHERE pr.provider = $1 AND pr.external_subject = $2
+             AND pr.principal_kind = 'AI' AND pr.enabled = TRUE AND p.enabled = TRUE
+           ORDER BY p.created_at ASC LIMIT 1 FOR UPDATE OF pr, p, wi"#
+    ).bind(&claims.iss).bind(&claims.sub).bind(room_id)
+        .fetch_optional(&mut *tx).await?;
+    let registered = match registered {
+        Some(identity) => identity,
+        None => {
+            sqlx::query("INSERT INTO security_audit_events (security_event_id, room_id, action, outcome, reason_code) VALUES ($1,$2,'auth.identity.denied','DENIED','identity_not_registered_or_disabled')")
+                .bind(Uuid::new_v4()).bind(room_id).execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Err(AuthError::IdentityUnavailable);
+        }
+    };
+
+    let previous: Option<Uuid> = sqlx::query_scalar(
+        "SELECT session_id FROM sessions WHERE room_id = $1 AND principal_id = $2 AND status = 'ACTIVE' AND revoked_at IS NULL FOR UPDATE"
+    ).bind(room_id).bind(registered.principal_id).fetch_optional(&mut *tx).await?;
+    if let Some(old_id) = previous {
+        sqlx::query(
+            "UPDATE sessions SET status = 'REVOKED', revoked_at = NOW() WHERE session_id = $1",
+        )
+        .bind(old_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE workload_executions SET status = 'REVOKED', revoked_at = NOW() WHERE session_id = $1 AND revoked_at IS NULL")
+            .bind(old_id).execute(&mut *tx).await?;
+    }
+
+    let session_id = Uuid::new_v4();
+    let execution_id = Uuid::new_v4();
+    let mut raw = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut raw);
+    let local_token = URL_SAFE_NO_PAD.encode(raw);
+    let token_hash = Sha256::digest(local_token.as_bytes()).to_vec();
+    let worker_subject = format!("{}|{}", claims.iss, claims.sub);
+
+    sqlx::query(
+        r#"INSERT INTO sessions
+           (session_id, tenant_id, room_id, principal_id, issued_at, expires_at, status, token_hash, rotated_from_session_id)
+           VALUES ($1,$2,$3,$4,$5,$6,'ACTIVE',$7,$8)"#
+    ).bind(session_id).bind(registered.tenant_id).bind(room_id).bind(registered.principal_id)
+        .bind(now).bind(expires_at).bind(token_hash).bind(previous)
+        .execute(&mut *tx).await?;
+
+    sqlx::query(
+        r#"INSERT INTO workload_executions
+           (execution_id, tenant_id, room_id, participant_id, principal_id, session_id,
+            worker_subject, heartbeat_at, expires_at, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ACTIVE')"#,
+    )
+    .bind(execution_id)
+    .bind(registered.tenant_id)
+    .bind(room_id)
+    .bind(registered.participant_id)
+    .bind(registered.principal_id)
+    .bind(session_id)
+    .bind(worker_subject)
+    .bind(now)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("UPDATE workload_identities SET last_seen_at = NOW() WHERE workload_id = $1")
+        .bind(registered.workload_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO security_audit_events (security_event_id, tenant_id, room_id, principal_id, action, outcome, reason_code, metadata) VALUES ($1,$2,$3,$4,'auth.session.created','SUCCESS','verified_oidc_exchange',$5)"
+    ).bind(Uuid::new_v4()).bind(registered.tenant_id).bind(room_id).bind(registered.principal_id)
+        .bind(serde_json::json!({"workload_id": registered.workload_id, "session_id": session_id, "execution_id": execution_id}))
+        .execute(&mut *tx).await?;
+
+    tx.commit().await?;
+    Ok(ExchangeResponse {
+        access_token: local_token,
+        token_type: "Bearer",
+        expires_at,
+        identity: AuthenticatedIdentity {
+            tenant_id: registered.tenant_id,
+            participant_id: registered.participant_id,
+            principal_id: registered.principal_id,
+            session_id,
+            execution_id,
+            room_id,
+            issuer: claims.iss,
+            subject: claims.sub,
+        },
+    })
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str, AuthError> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AuthError::Unauthorized)?;
+    value
+        .strip_prefix("Bearer ")
+        .filter(|v| !v.is_empty())
+        .ok_or(AuthError::Unauthorized)
+}
+
+pub async fn authenticate_session(
+    pool: &PgPool,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedIdentity, AuthError> {
+    let token = bearer_token(headers)?;
+    let digest = Sha256::digest(token.as_bytes()).to_vec();
+    sqlx::query("UPDATE sessions SET status = 'EXPIRED' WHERE token_hash = $1 AND status = 'ACTIVE' AND expires_at <= NOW()")
+        .bind(&digest).execute(pool).await?;
+    sqlx::query("UPDATE workload_executions SET status = 'EXPIRED' WHERE session_id IN (SELECT session_id FROM sessions WHERE token_hash = $1 AND status = 'EXPIRED') AND status = 'ACTIVE'")
+        .bind(&digest).execute(pool).await?;
+    let row = sqlx::query_as::<_, SessionIdentity>(
+        r#"SELECT s.tenant_id, w.participant_id, s.principal_id, s.session_id, w.execution_id,
+                  s.room_id, pr.provider AS issuer, pr.external_subject AS subject
+           FROM sessions s
+           JOIN principals pr ON pr.tenant_id = s.tenant_id AND pr.principal_id = s.principal_id
+           JOIN participants p ON p.tenant_id = s.tenant_id AND p.principal_id = s.principal_id AND p.enabled = TRUE
+           JOIN workload_identities wi ON wi.tenant_id = s.tenant_id AND wi.principal_id = s.principal_id
+                AND wi.status = 'ACTIVE' AND wi.issuer = pr.provider AND wi.subject = pr.external_subject
+           JOIN workload_executions w ON w.tenant_id = s.tenant_id AND w.room_id = s.room_id
+                AND w.participant_id = p.participant_id AND w.principal_id = s.principal_id
+                AND w.session_id = s.session_id
+           WHERE s.token_hash = $1 AND s.status = 'ACTIVE' AND s.revoked_at IS NULL
+             AND s.expires_at > NOW() AND pr.enabled = TRUE
+             AND w.status = 'ACTIVE' AND w.revoked_at IS NULL AND w.expires_at > NOW()
+           LIMIT 1"#
+    ).bind(digest).fetch_optional(pool).await?;
+    let row = match row {
+        Some(row) => row,
+        None => {
+            let _ = sqlx::query("INSERT INTO security_audit_events (security_event_id, action, outcome, reason_code) VALUES ($1,'auth.session.denied','DENIED','invalid_expired_revoked_or_disabled')")
+                .bind(Uuid::new_v4()).execute(pool).await;
+            return Err(AuthError::Unauthorized);
+        }
+    };
+    Ok(AuthenticatedIdentity {
+        tenant_id: row.tenant_id,
+        participant_id: row.participant_id,
+        principal_id: row.principal_id,
+        session_id: row.session_id,
+        execution_id: row.execution_id,
+        room_id: row.room_id,
+        issuer: row.issuer,
+        subject: row.subject,
+    })
+}
+
+pub async fn require_permission(
+    pool: &PgPool,
+    identity: &AuthenticatedIdentity,
+    permission: &str,
+) -> Result<(), AuthError> {
+    let allowed: bool = sqlx::query_scalar(
+        r#"SELECT EXISTS(SELECT 1 FROM principal_permissions
+           WHERE tenant_id = $1 AND principal_id = $2 AND permission = $3
+             AND revoked_at IS NULL AND (room_id IS NULL OR room_id = $4))"#,
+    )
+    .bind(identity.tenant_id)
+    .bind(identity.principal_id)
+    .bind(permission)
+    .bind(identity.room_id)
+    .fetch_one(pool)
+    .await?;
+    if allowed {
+        Ok(())
+    } else {
+        let _ = sqlx::query("INSERT INTO security_audit_events (security_event_id, tenant_id, room_id, principal_id, action, outcome, reason_code, metadata) VALUES ($1,$2,$3,$4,'authorization.denied','DENIED','permission_not_granted',$5)")
+            .bind(Uuid::new_v4()).bind(identity.tenant_id).bind(identity.room_id).bind(identity.principal_id)
+            .bind(serde_json::json!({"permission": permission})).execute(pool).await;
+        Err(AuthError::Forbidden)
+    }
+}
+
+pub async fn close_session(
+    pool: &PgPool,
+    identity: &AuthenticatedIdentity,
+) -> Result<(), AuthError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE sessions SET status = 'CLOSED', closed_at = NOW(), revoked_at = COALESCE(revoked_at, NOW()) WHERE session_id = $1 AND principal_id = $2")
+        .bind(identity.session_id).bind(identity.principal_id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE workload_executions SET status = 'CLOSED', revoked_at = COALESCE(revoked_at, NOW()) WHERE execution_id = $1 AND session_id = $2")
+        .bind(identity.execution_id).bind(identity.session_id).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO security_audit_events (security_event_id, tenant_id, room_id, principal_id, action, outcome, reason_code, metadata) VALUES ($1,$2,$3,$4,'auth.session.closed','SUCCESS','logout',$5)")
+        .bind(Uuid::new_v4()).bind(identity.tenant_id).bind(identity.room_id).bind(identity.principal_id)
+        .bind(serde_json::json!({"session_id": identity.session_id, "execution_id": identity.execution_id}))
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod jwt_tests {
+    use super::*;
+    use axum::{routing::get, Json, Router};
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    const PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDIuXmGCianrTIb
+EGxBtFvQb2PxhHpiiWo5UPDDqMKIIa6tDqX+02a9aHORgwWRHR9J9E5ZqjJ6su4a
+UTpEtwNqsZKOTRbTuQfp1xa1DLknwFZj2Y7MmNwPIw9xK16vURIu5ycZtU4WzhCP
+4mr5aokOycOTNRId5mgKI1SCAunH/kMVVzYUsumospaQqvZptx9ksXCW7fBukQ5L
+fCFwE6mll38r4cBWthibCIMNVBUDoTiKWrvylw6spV0JqctB5GDJvKRmxqVGn0ec
+3pCxlXCjeTQ8cIeim4agbIW7xlsG9fPpyybnQqiPp4+RP0Flpab9z3iMjGRyKQMr
+mvSHPo/fAgMBAAECggEABKIe8huwUkpOLFbeJxMA0/9uPX9KIbImjQBehXzL39vm
+SmwhzlaWq8DRXo25W7pFlhFR8MkGoCjh2z83MeMVXo05qgmtuf2gaQZrN+A2T0HQ
+iulGz8mLgRHxxzIx3eF2osOjZ/kRE9QgwYUN5KSlPQvQynL9DNi/sPCpZCn+m0OA
+49UQuF7wXhvE0ZnniUPMubAlLE9QCjm0oJyE2Cz1ggEkQVLOkgJVPWcAxx7+Rq+a
+HlLTkvfAZqF2WoGkORqKBoXu50HzA+y/VGQzEWW04WaqzZD2eHCWVgFnC+TIFBhN
+FwctX2iG0wjpcDpIYZ3odkTB/BrjyiRLwOVbiojZUQKBgQDi5asixAhqdCBHe31J
+ojM17YtRXlZnkbdtgqfAPErhyPgzOqc/bE04UDN7yK4eMYvS1dYOhwQEU6UNiiNp
+6c40N8qUES2f6Q6+ATH2wGQqpX88JT4/7KSoDGWKujAy/NKNMt4mWCC6shfnykUM
+QyuFgex9GPp6wDg+hZ5x6SQICQKBgQDieGivz+fgOECpJFLrNq1Mb5yycfPHQNl
+LtGKQgWEK+aNLmbDnZzhcRCwmGj/HaquIdx4gIhz4wj6py2BQEeEvTgSgDKYn0JCl
+F9VhzxDitsWH/Ik8n84MhqV13rLpG9e577iucTcsr0HE9FILj1V4h565C14I9XJk
+vZConhNCpwKBgQCe4x+tT8No8HruM66vkpLz762AxGQTULo3SKg5+L6jT71m+mrG
+AgwtJBR5WTV81UtJ0A5+y9NnSD+rtJFKCL0qWetVNpZRhb2aFnIrjdxW9N+deaMW
+1psTRuMQe4NnIR48XGOuTEZXFoGhAkbJ6HugmTPHAmfc76AzQBSNRirCKQKBgGNR
+VO/NaK4vXUQQNwEKUIPV6s1jJfq7GNCXgiZHZwyOICv2cdt5rADisM3g8xl8UU+e
+laqX60a4wQxrsYhL3wqE14htI60QTW7pfd3QFmKmrwgNGw5oMs/ReNyxVpreaAQV
++lMeOYkyLtC2KQkCygP6zgPu1UVuhsVhUQBxmpa/AoGBAIOLs6rSTcZ2/C7pI/Un
++J0c2OUloGFyh2myDNABc3qV5XW2Ax8tNc4qHkHf5j4WS3mWDvjsNDYrHKcfI0og
+Zz2oCgvmWOAGdhIM+9i/xRZaXDUMyZSx/1bSRaWrcJHgWcnGuVQ75O5rVSjordo7
+a93ROy+abL98Yf/fSAlNg3Lw
+-----END PRIVATE KEY-----"#;
+
+    const N: &str = "yLl5hgomp60yGxBsQbRb0G9j8YR6YolqOVDww6jCiCGurQ6l_tNmvWhzkYMFkR0fSfROWaoyerLuGlE6RLcDarGSjk0W07kH6dcWtQy5J8BWY9mOzJjcDyMPcSter1ESLucnGbVOFs4Qj-Jq-WqJDsnDkzUSHeZoCiNUggLpx_5DFVc2FLLpqLKWkKr2abcfZLFwlu3wbpEOS3whcBOppZd_K-HAVrYYmwiDDVQVA6E4ilq78pcOrKVdCanLQeRgybykZsalRp9HnN6QsZVwo3k0PHCHopuGoGyFu8ZbBvXz6csm50Koj6ePkT9BZaWm_c94jIxkcikDK5r0hz6P3w";
+    // Independently generated synthetic RSA-2048 keypair used only to prove signing-key rollover.
+    const ROTATED_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDW5yk3js+uRa/l
+vtXPK4ehpPUEbxUTMlF0eJtAGwpNL1zSP/XexoCnxnHLbUPudqtgsSIOAAP9lWkd
+3TN9F4cKHMR/jQD943qFHIRimgN14qySx3qaoA4lUiGhxC4kkT8IDtq4iF7RG8b0
+MH730EOF7ciEHAOqnkGM6xIOy8642sOnOIkXsW2r40Zx1dG+Xoge0oPunNj2SQhh
+KKgA7L+f7N9uNEQ4fL0S8ftU8a6LqbCFJFa2YkKnFLS1Lz/HWxgT6OjFFXnAgeaK
+n3rmVOdH+dA3T03T52o8MPuaV6GHFAwBoAldicYa91//oc4ty0fbVOXH2cZZw+Ec
+Bl3xxYM9AgMBAAECggEABnYj2J5MI0bIH6XJwvVhmhweG9iFLzMTnOdlb5uAh0qV
+xWKT73NTeffvAvlRkhFyXLFmvzoD5LOB2hqFCk1TS5wK0nT4YyncTLVLS7Wqxfgf
+TTh/OLf4ROn/xd/irUnKteDQdbzv8OSfakctAiF6bkP0g/hdqdshSG3m+JfrKsam
+/YCsMsYQAJjX/RWEztEpmja3yZNmb3R5AZvea9uKQpBEF192vctZFEifB9HswKng
+dsdMONJBGbL9AChM4ofnBis1XqAIDBRYQ3ZTrPM8ON7fQo9e8BZwed8PyWI5vVUS
+LrAkW1ByKnxT4y38Rw9kRaTORfCulRCs0uJLK8gdVwKBgQD13OyUe5r76Q81/kYZ
+4OwX7aMEPO+gsT9roIvZ9Es2+LTBsM98DdHqaUiUTDVUx2uzCTrI1wY0sO9cMyeq
+3ePPCq+AT2hDdHaTuhjzhfwVGm0pUIci/NHKvrXuO1fe767Lcg4mUAZR2HFSWY9i
+d+N2dkoOA20R/AbgkZRO8HS9DwKBgQDfw3R2mRDSdoXHUWR4W3g64KkqTQg5hdAQ
+f0fmkvgsNE4NSZDwRvo32bRnj7l7qcmRkYJmjq9GrQ50WyVDFi9N9q5T47qBkbGB
+vUlBYWXa7vuEvglBc3RjflH6aRDknzcQpywoG+UWuqHOksvAeZo2/A9V8vDC8xvK
+W6kSLaUS8wKBgQDdXZfJLO1jSPkAFTwKyt/nv3eaNj9PAKfogLnKeNFL4mvlRQvb
+Vxoco8TMeT0/YvpOTc4WzLtyr6gj7I8XogceADH6JgTrTy4AXnter9FDMvL8UtwJ
+nXZKxKFLqTS5rjZESSICTuURxf5qNecKsoUjwOd2bJFEsxWCFrFgzdFd8wKBgQDT
+NKbiJrolHXBKYT4HCLdkQ5gI8GrZ+L8aQzl3nrOW7cvaaNzgnu4g92F7+sIlwm4a
+85B1AyrX+BLTqxBx0SfXXAbR8fqhwAYfIq5Zgvhj/Pz1H3aXC8YI/zubs74ZPVr5
+YgGg3iuPF5wQ4qhlRaJVUfebtdKhAFzz1S6xlNniFwKBgCOi1mpNaPbhrPwgH70F
+Ep74fgA62azYP5lT+7XDkMwHpMe12mtm1BCZinQ6ATNPcS4wZ0aXrvksUUM6EXr5
+FfOHKxx44ulLvAKdw5TssEeUcC/9lzP77Qb+vnjeH7ljijCyKhBYR2wL8rusPOaN
+rYCbrUTET0soLkbXAVaf4NZm
+-----END PRIVATE KEY-----"#;
+    const ROTATED_N: &str = "1ucpN47PrkWv5b7VzyuHoaT1BG8VEzJRdHibQBsKTS9c0j_13saAp8Zxy21D7narYLEiDgAD_ZVpHd0zfReHChzEf40A_eN6hRyEYpoDdeKsksd6mqAOJVIhocQuJJE_CA7auIhe0RvG9DB-99BDhe3IhBwDqp5BjOsSDsvOuNrDpziJF7Ftq-NGcdXRvl6IHtKD7pzY9kkIYSioAOy_n-zfbjREOHy9EvH7VPGui6mwhSRWtmJCpxS0tS8_x1sYE-joxRV5wIHmip965lTnR_nQN09N0-dqPDD7mlehhxQMAaAJXYnGGvdf_6HOLctH21Tlx9nGWcPhHAZd8cWDPQ";
+
+    async fn test_server() -> (String, tokio::task::JoinHandle<()>) {
+        let jwks = json!({"keys":[{"kty":"RSA","kid":"test-key","use":"sig","alg":"RS256","n":N,"e":"AQAB"}]});
+        let app = Router::new().route(
+            "/jwks",
+            get(move || {
+                let value = jwks.clone();
+                async move { Json(value) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}/jwks"), task)
+    }
+
+    fn signed_token(issuer: &str, audience: &str, exp: usize, kid: &str) -> String {
+        signed_token_with_key(issuer, audience, exp, kid, PRIVATE_KEY)
+    }
+
+    fn signed_token_with_key(
+        issuer: &str,
+        audience: &str,
+        exp: usize,
+        kid: &str,
+        pem: &str,
+    ) -> String {
+        let claims = OidcClaims {
+            iss: issuer.into(),
+            sub: "agent-subject".into(),
+            aud: json!(audience),
+            exp,
+            nbf: Some(Utc::now().timestamp() as usize - 1),
+            iat: Utc::now().timestamp() as usize,
+            jti: Uuid::new_v4().to_string(),
+            scope: "team_room:connect".into(),
+        };
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(kid.into());
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn oidc_jwks_signature_issuer_audience_expiry_and_kid_are_enforced() {
+        let (jwks_url, server) = test_server().await;
+        let config = OidcConfig {
+            issuer: "https://issuer.example.test".into(),
+            audience: "team-room-api".into(),
+            jwks_url,
+            require_discovery: false,
+            expected_jwks_url: None,
+            allow_http_localhost: true,
+        };
+        let valid = signed_token(
+            &config.issuer,
+            &config.audience,
+            (Utc::now() + Duration::minutes(2)).timestamp() as usize,
+            "test-key",
+        );
+        assert!(verify_oidc_token(&config, &valid).await.is_ok());
+
+        let expired = signed_token(
+            &config.issuer,
+            &config.audience,
+            (Utc::now() - Duration::minutes(2)).timestamp() as usize,
+            "test-key",
+        );
+        assert!(matches!(
+            verify_oidc_token(&config, &expired).await,
+            Err(AuthError::Unauthorized)
+        ));
+
+        let wrong_issuer = signed_token(
+            "https://attacker.example.test",
+            &config.audience,
+            (Utc::now() + Duration::minutes(2)).timestamp() as usize,
+            "test-key",
+        );
+        assert!(matches!(
+            verify_oidc_token(&config, &wrong_issuer).await,
+            Err(AuthError::Unauthorized)
+        ));
+
+        let wrong_audience = signed_token(
+            &config.issuer,
+            "other-api",
+            (Utc::now() + Duration::minutes(2)).timestamp() as usize,
+            "test-key",
+        );
+        assert!(matches!(
+            verify_oidc_token(&config, &wrong_audience).await,
+            Err(AuthError::Unauthorized)
+        ));
+
+        let unknown_kid = signed_token(
+            &config.issuer,
+            &config.audience,
+            (Utc::now() + Duration::minutes(2)).timestamp() as usize,
+            "unknown-key",
+        );
+        assert!(matches!(
+            verify_oidc_token(&config, &unknown_kid).await,
+            Err(AuthError::Unauthorized)
+        ));
+
+        let mut invalid_signature = valid.clone();
+        invalid_signature.push('x');
+        assert!(matches!(
+            verify_oidc_token(&config, &invalid_signature).await,
+            Err(AuthError::Unauthorized)
+        ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn discovery_pins_issuer_and_refreshes_jwks_for_rotated_kid() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let jwks_state = Arc::new(RwLock::new(
+            json!({"keys":[{"kty":"RSA","kid":"old-key","use":"sig","alg":"RS256","n":N,"e":"AQAB"}]}),
+        ));
+        let metadata_state = Arc::new(RwLock::new(json!({})));
+        let jwks_for_route = jwks_state.clone();
+        let metadata_for_route = metadata_state.clone();
+        let app = Router::new()
+            .route(
+                "/realms/rotation/.well-known/openid-configuration",
+                get(move || {
+                    let state = metadata_for_route.clone();
+                    async move { Json(state.read().await.clone()) }
+                }),
+            )
+            .route(
+                "/jwks",
+                get(move || {
+                    let state = jwks_for_route.clone();
+                    async move { Json(state.read().await.clone()) }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let issuer = format!("http://127.0.0.1:{}/realms/rotation", address.port());
+        *metadata_state.write().await = json!({
+            "issuer": issuer.clone(),
+            "authorization_endpoint": format!("http://127.0.0.1:{}/auth", address.port()),
+            "token_endpoint": format!("http://127.0.0.1:{}/token", address.port()),
+            "jwks_uri": format!("http://127.0.0.1:{}/jwks", address.port()),
+            "id_token_signing_alg_values_supported": ["RS256"]
+        });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let config = OidcConfig {
+            issuer,
+            audience: "team-room-api".into(),
+            jwks_url: String::new(),
+            require_discovery: true,
+            expected_jwks_url: None,
+            allow_http_localhost: true,
+        };
+        let old_token = signed_token(
+            &config.issuer,
+            &config.audience,
+            (Utc::now() + Duration::minutes(2)).timestamp() as usize,
+            "old-key",
+        );
+        assert!(verify_oidc_token(&config, &old_token).await.is_ok());
+
+        *jwks_state.write().await = json!({"keys":[{"kty":"RSA","kid":"new-key","use":"sig","alg":"RS256","n":ROTATED_N,"e":"AQAB"}]});
+        let new_token = signed_token_with_key(
+            &config.issuer,
+            &config.audience,
+            (Utc::now() + Duration::minutes(2)).timestamp() as usize,
+            "new-key",
+            ROTATED_PRIVATE_KEY,
+        );
+        assert!(verify_oidc_token(&config, &new_token).await.is_ok());
+        assert!(matches!(
+            verify_oidc_token(&config, &old_token).await,
+            Err(AuthError::Unauthorized)
+        ));
+
+        let mut wrong_metadata = metadata_state.write().await;
+        wrong_metadata["issuer"] = json!("http://127.0.0.1:9/attacker");
+        drop(wrong_metadata);
+        assert!(matches!(
+            resolve_jwks_url(&config, true).await,
+            Err(AuthError::ProviderUnavailable)
+        ));
+        server.abort();
+    }
+
+    #[test]
+    fn localhost_http_exception_rejects_lookalike_hosts_and_userinfo() {
+        assert!(is_loopback_http_url(
+            "http://localhost:8080/realms/team-room"
+        ));
+        assert!(is_loopback_http_url(
+            "http://127.0.0.1:8080/realms/team-room"
+        ));
+        assert!(!is_loopback_http_url(
+            "http://localhost.attacker.example/realm"
+        ));
+        assert!(!is_loopback_http_url(
+            "http://127.0.0.1.attacker.example/realm"
+        ));
+        assert!(!is_loopback_http_url(
+            "http://localhost@attacker.example/realm"
+        ));
+        assert!(!is_loopback_http_url("https://localhost/realm"));
+    }
+
+    #[tokio::test]
+    async fn discovery_rejects_lookalike_http_token_and_authorization_endpoints() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let metadata = Arc::new(RwLock::new(json!({
+            "issuer": "http://127.0.0.1:12345/realm",
+            "token_endpoint": "http://localhost.attacker.example/token",
+            "authorization_endpoint": "http://127.0.0.1.attacker.example/auth",
+            "jwks_uri": "http://127.0.0.1:12345/jwks",
+            "id_token_signing_alg_values_supported": ["RS256"]
+        })));
+        let state = metadata.clone();
+        let app = Router::new().route(
+            "/realm/.well-known/openid-configuration",
+            get(move || {
+                let value = state.clone();
+                async move { Json(value.read().await.clone()) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let issuer = format!("http://{}/realm", address);
+        metadata.write().await["issuer"] = json!(issuer.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let config = OidcConfig {
+            issuer,
+            audience: "team-room-api".into(),
+            jwks_url: String::new(),
+            require_discovery: true,
+            expected_jwks_url: None,
+            allow_http_localhost: true,
+        };
+
+        assert!(matches!(
+            resolve_jwks_url(&config, true).await,
+            Err(AuthError::ProviderUnavailable)
+        ));
+        metadata.write().await["token_endpoint"] = json!(format!("http://{}/token", address));
+        assert!(matches!(
+            resolve_jwks_url(&config, true).await,
+            Err(AuthError::ProviderUnavailable)
+        ));
+        metadata.write().await["authorization_endpoint"] =
+            json!(format!("http://{}/auth", address));
+        assert!(resolve_jwks_url(&config, true).await.is_ok());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn oidc_algorithms_other_than_rs256_are_rejected_before_jwks_use() {
+        let config = OidcConfig {
+            issuer: "https://issuer.example.test".into(),
+            audience: "team-room-api".into(),
+            jwks_url: "https://unused.invalid/jwks".into(),
+            require_discovery: false,
+            expected_jwks_url: None,
+            allow_http_localhost: true,
+        };
+        let token = jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &json!({"iss":config.issuer,"sub":"x","aud":config.audience,"exp":(Utc::now()+Duration::minutes(1)).timestamp(),"jti":"x","scope":"team_room:connect"}),
+            &jsonwebtoken::EncodingKey::from_secret(b"test-only-secret"),
+        ).unwrap();
+        assert!(matches!(
+            verify_oidc_token(&config, &token).await,
+            Err(AuthError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn jwt_claim_security_matrix_accepts_valid_and_rejects_invalid_claims() {
+        use serde_json::Value;
+
+        fn sign_claims(claims: Value) -> String {
+            let mut header = Header::new(Algorithm::RS256);
+            header.kid = Some("test-key".into());
+            encode(
+                &header,
+                &claims,
+                &EncodingKey::from_rsa_pem(PRIVATE_KEY.as_bytes()).unwrap(),
+            )
+            .unwrap()
+        }
+
+        let (jwks_url, server) = test_server().await;
+        let config = OidcConfig {
+            issuer: "https://issuer.example.test".into(),
+            audience: "team-room-api".into(),
+            jwks_url,
+            require_discovery: false,
+            expected_jwks_url: None,
+            allow_http_localhost: true,
+        };
+        let now = Utc::now().timestamp() as usize;
+        let valid_claims = json!({
+            "iss": config.issuer,
+            "sub": "agent-subject",
+            "aud": config.audience,
+            "exp": now + 180,
+            "nbf": now.saturating_sub(1),
+            "iat": now,
+            "jti": Uuid::new_v4().to_string(),
+            "scope": "openid team_room:connect"
+        });
+
+        assert!(
+            verify_oidc_token(&config, &sign_claims(valid_claims.clone()))
+                .await
+                .is_ok(),
+            "valid RS256 claims must be accepted"
+        );
+
+        let mut invalid_cases: Vec<(&str, Value)> = Vec::new();
+
+        let mut future_nbf = valid_claims.clone();
+        future_nbf["nbf"] = json!(now + 120);
+        invalid_cases.push(("future nbf", future_nbf));
+
+        let mut future_iat = valid_claims.clone();
+        future_iat["iat"] = json!(now + 120);
+        invalid_cases.push(("future iat beyond allowed skew", future_iat));
+
+        let mut expired = valid_claims.clone();
+        expired["exp"] = json!(now.saturating_sub(120));
+        invalid_cases.push(("expired exp", expired));
+
+        let mut wrong_issuer = valid_claims.clone();
+        wrong_issuer["iss"] = json!("https://attacker.example.test");
+        invalid_cases.push(("wrong issuer", wrong_issuer));
+
+        let mut wrong_audience = valid_claims.clone();
+        wrong_audience["aud"] = json!("another-api");
+        invalid_cases.push(("wrong audience", wrong_audience));
+
+        let mut insufficient_scope = valid_claims.clone();
+        insufficient_scope["scope"] = json!("openid profile");
+        invalid_cases.push(("insufficient scope", insufficient_scope));
+
+        let mut empty_subject = valid_claims.clone();
+        empty_subject["sub"] = json!("");
+        invalid_cases.push(("empty sub", empty_subject));
+
+        let mut empty_jti = valid_claims.clone();
+        empty_jti["jti"] = json!("");
+        invalid_cases.push(("empty jti", empty_jti));
+
+        let mut missing_subject = valid_claims.clone();
+        missing_subject.as_object_mut().unwrap().remove("sub");
+        invalid_cases.push(("missing sub", missing_subject));
+
+        let mut missing_jti = valid_claims.clone();
+        missing_jti.as_object_mut().unwrap().remove("jti");
+        invalid_cases.push(("missing jti", missing_jti));
+
+        let mut missing_iat = valid_claims.clone();
+        missing_iat.as_object_mut().unwrap().remove("iat");
+        invalid_cases.push(("missing iat", missing_iat));
+
+        let mut missing_exp = valid_claims.clone();
+        missing_exp.as_object_mut().unwrap().remove("exp");
+        invalid_cases.push(("missing exp", missing_exp));
+
+        for (case, claims) in invalid_cases {
+            let signed = sign_claims(claims);
+            assert!(
+                matches!(
+                    verify_oidc_token(&config, &signed).await,
+                    Err(AuthError::Unauthorized)
+                ),
+                "security case must reject: {case}"
+            );
+        }
+
+        server.abort();
+    }
+}
