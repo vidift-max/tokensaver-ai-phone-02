@@ -28,6 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing_subscriber::EnvFilter;
+use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -896,6 +897,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| "DATABASE_URL must point to the shared PostgreSQL service")?;
     let bind: SocketAddr = env::var("TEAM_ROOM_BIND")
+        .or_else(|_| env::var("PORT").map(|port| format!("0.0.0.0:{port}")))
         .unwrap_or_else(|_| "127.0.0.1:8081".to_string())
         .parse()?;
 
@@ -922,7 +924,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let state = AppState { pool, oidc };
 
-    let app = build_router(state);
+    let app = build_router(state).fallback_service(ServeDir::new("/app/web").append_index_html_on_directories(true));
 
     // P2.38-B real application HTTPS mode: the full router and PostgreSQL-backed
     // AppState are served by this process. No HTTP listener is created in this mode.
