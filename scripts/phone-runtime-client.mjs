@@ -70,8 +70,9 @@ export class PhoneRuntimeClient {
       catch { throw new PhoneRuntimeError("AI Phone returned invalid JSON", response.status, "INVALID_RESPONSE"); }
     }
     if (!response.ok) {
-      const code = response.status === 401 || response.status === 403 || response.status === 412
-        ? "AUTHORIZATION_LOST" : "HTTP_ERROR";
+      const authorizationLost = response.status === 401 || response.status === 403 || response.status === 412;
+      if (authorizationLost) this.sessionToken = "";
+      const code = authorizationLost ? "AUTHORIZATION_LOST" : "HTTP_ERROR";
       throw new PhoneRuntimeError(`AI Phone rejected ${method} ${route} (HTTP ${response.status})`, response.status, code);
     }
     return payload;
