@@ -7,9 +7,11 @@ let executor = null;
 const recipient = process.env.AI_PHONE_REPLY_TO_ID || "";
 
 function requireRuntimeConfig() {
-  if (!recipient) throw new Error("AI_PHONE_REPLY_TO_ID is required");
   if (!client) client = new PhoneRuntimeClient();
   if (!executor) executor = new RemoteAiExecutor();
+}
+function configurationReady() {
+  return Boolean(recipient);
 }
 
 const seen = new Set();
@@ -44,6 +46,7 @@ async function refreshBinding() {
 }
 
 async function ensureHeartbeat(force = false) {
+  if (!configurationReady()) return;
   requireRuntimeConfig();
   const now = Date.now();
   if (!force && now - lastHeartbeat < heartbeatEvery) return;
@@ -53,7 +56,7 @@ async function ensureHeartbeat(force = false) {
 }
 
 async function tick() {
-  if (stopping || ticking) return;
+  if (stopping || ticking || !configurationReady()) return;
   requireRuntimeConfig();
   ticking = true;
   try {
@@ -114,13 +117,14 @@ const server = http.createServer((request, response) => {
       service: "ai-phone-02-worker",
       status: "live",
       attached: Number.isInteger(endpointFence),
-      polling: !stopping
+      polling: !stopping,
+      configured: configurationReady()
     }));
     return;
   }
 
   if (request.method === "GET" && request.url === "/health/ready") {
-    const ready = Number.isInteger(endpointFence) && !stopping;
+    const ready = Number.isInteger(endpointFence) && !stopping && configurationReady();
     response.writeHead(ready ? 200 : 503, { "content-type": "application/json" });
     response.end(JSON.stringify({
       service: "ai-phone-02-worker",
@@ -136,8 +140,10 @@ const server = http.createServer((request, response) => {
 server.listen(port, host, async () => {
   console.log("AI-PHONE-02 worker starting");
   try {
-    requireRuntimeConfig();
-    await refreshBinding();
+    if (configurationReady()) {
+      requireRuntimeConfig();
+      await refreshBinding();
+    }
     await guardedTick();
   } catch (error) {
     console.error("worker startup binding failed", error.code || error.message);
