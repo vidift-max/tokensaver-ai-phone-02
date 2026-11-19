@@ -12,7 +12,7 @@ const config = {
   PHONE02_ENDPOINT_ID: "30000000-0000-4000-8000-000000000003"
 };
 function response(status, payload) {
-  return { ok: status >= 200 && status < 300, status, text: async () => payload === null ? "" : JSON.stringify(payload) };
+  return { ok: status >= 200 && status < 300, status, text: async () => payload === null ? "" : JSON.stringify(payload), json: async () => payload };
 }
 
 test("requires explicit scoped runtime configuration and rejects insecure remote HTTP", () => {
