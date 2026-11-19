@@ -41,12 +41,6 @@ private:
                  std::string& response,
                  DWORD& status,
                  std::wstring& reason) const;
-    bool authorizedRequest(const wchar_t* method,
-                           const std::wstring& path,
-                           const std::string& body,
-                           std::string& response,
-                           DWORD& status,
-                           std::wstring& reason) const;
     bool parseUuidField(const std::string& json, const char* key, std::string& out) const;
     bool parseStringField(const std::string& json, const char* key, std::string& out) const;
     bool parsePhoneId(const std::string& json, std::string& out) const;
