@@ -38,11 +38,22 @@ let stopping = false;
 
 async function refreshBinding() {
   requireRuntimeConfig();
-  const snapshot = await client.getSnapshot();
+  if (!client.sessionToken) await client.exchangeOidcSession();
+  let snapshot;
+  try {
+    snapshot = await client.getSnapshot();
+  } catch (error) {
+    if (error.code !== "AUTHORIZATION_LOST" || !client.oidcIssuer) throw error;
+    await client.exchangeOidcSession();
+    snapshot = await client.getSnapshot();
+  }
   endpointFence = snapshot?.attachment?.endpoint_fence;
   if (!Number.isInteger(endpointFence)) {
-    throw new Error("Phone-02 endpoint is not currently attached");
+    await client.attach();
+    snapshot = await client.getSnapshot();
+    endpointFence = snapshot?.attachment?.endpoint_fence;
   }
+  if (!Number.isInteger(endpointFence)) throw new Error("Phone-02 endpoint is not currently attached");
 }
 
 async function ensureHeartbeat(force = false) {
