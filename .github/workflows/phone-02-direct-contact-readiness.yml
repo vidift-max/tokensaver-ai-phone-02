@@ -1,0 +1,58 @@
+name: Phone-02 Direct Contact Readiness
+
+on:
+  push:
+    branches:
+      - mission/remote-contact-tablet-first
+    paths:
+      - 'src/**'
+      - 'services/ai-team-room/**'
+      - 'services/phone-supervisor/**'
+      - 'release/phone-02/**'
+      - 'scripts/phone-runtime-client.mjs'
+      - 'scripts/team-room-client.mjs'
+      - 'tests/**'
+      - '.github/workflows/phone-02-direct-contact-readiness.yml'
+  pull_request:
+    branches:
+      - v2-saas-alpha
+    paths:
+      - 'src/**'
+      - 'services/ai-team-room/**'
+      - 'services/phone-supervisor/**'
+      - 'release/phone-02/**'
+      - 'scripts/phone-runtime-client.mjs'
+      - 'scripts/team-room-client.mjs'
+      - 'tests/**'
+      - '.github/workflows/phone-02-direct-contact-readiness.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phone02-direct-contact-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build unsigned Phone-02 package and Supervisor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\release\phone-02\build-unsigned-msix.ps1 -ExpectedSourceSha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Phone-02 release build failed' }
+      - name: Assert real-contact credentials are never baked into package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $forbidden = '(?i)(CLIENT_SECRET|ACCESS_TOKEN|TEAM_ROOM_SESSION|ENDPOINT_CREDENTIAL|OPERATOR_KEY|PASSWORD)\s*[:=]'
+          $files = Get-ChildItem -Recurse -File services,release,scripts,src -ErrorAction Stop
+          $matches = $files | Select-String -Pattern $forbidden -ErrorAction SilentlyContinue
+          if ($matches) { $matches | ForEach-Object { Write-Host $_ }; throw 'SECRET_MATERIAL_IN_SOURCE_CONFIG' }
+          Write-Host 'SOURCE_SECRET_BOUNDARY=PASS'
