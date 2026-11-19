@@ -19,6 +19,8 @@ services:
         sync: false
       - key: OIDC_JWKS_URL
         sync: false
+      - key: TEAM_ROOM_REQUIRE_OIDC
+        value: "true"
 
   - type: web
     name: ai-phone-02-agent
