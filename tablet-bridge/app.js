@@ -10,6 +10,20 @@ setPill("inbox-state", reply.value ? "Recebida" : "Aguardando");
 mission.addEventListener("input", () => { localStorage.setItem(KEY_MISSION, mission.value); setPill("mission-state", mission.value ? "Salva" : "Vazia"); });
 reply.addEventListener("input", () => { localStorage.setItem(KEY_REPLY, reply.value); setPill("inbox-state", reply.value ? "Recebida" : "Aguardando"); });
 $("save-mission").addEventListener("click", () => { localStorage.setItem(KEY_MISSION, mission.value); say("Missão salva somente neste dispositivo."); });
+
+async function pasteFromClipboard(target, label){
+  try {
+    if (!navigator.clipboard?.readText) throw new Error("clipboard-read-unavailable");
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) { say("A área de transferência está vazia."); return; }
+    target.value = text;
+    target.dispatchEvent(new Event("input", {bubbles:true}));
+    say(label + " colada da área de transferência.");
+  } catch { say("Não foi possível ler a área de transferência. Toque no campo, mantenha pressionado e escolha Colar."); }
+}
+$("paste-mission").addEventListener("click", () => pasteFromClipboard(mission, "Missão"));
+$("paste-reply").addEventListener("click", () => pasteFromClipboard(reply, "Resposta"));
+
 async function shareText(text, label){
   if (!text.trim()) { say("Não há texto para compartilhar."); return; }
   if (!navigator.share) { say("Compartilhamento do sistema indisponível. Use Copiar e cole no ChatGPT."); return; }
