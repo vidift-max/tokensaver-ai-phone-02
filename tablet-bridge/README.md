@@ -45,3 +45,7 @@ Para disponibilizar a PWA em HTTPS, criar um serviço **Static Site** no workspa
 - Auto-deploy: desativado até autorização explícita.
 
 O Render fornece HTTPS para o subdomínio do serviço. Serviço público e consumo de banda dependem das condições/limites do plano; revisar o painel antes de criar. A criação e o deploy não foram executados.
+
+## Revisão da implementação
+
+O handler de um botão de salvamento removido foi eliminado para evitar referência a elemento inexistente durante a inicialização. O fluxo atual salva automaticamente ao editar os campos; a regressão está coberta pelo teste de UI.
