@@ -17,7 +17,7 @@ async function shareText(text, label){
   catch (error) { if (error.name !== "AbortError") say("Não foi possível abrir o compartilhamento."); }
 }
 $("share-mission").addEventListener("click", () => shareText(mission.value, "Missão para IA-2"));
-$("send-reply").addEventListener("click", () => shareText(reply.value, "Resposta da IA-2 para GPT-6"));
+$("send-reply").addEventListener("click", async () => { try { await navigator.clipboard.writeText(reply.value); say("Resposta copiada. Volte à conversa GPT-6 no navegador e cole."); } catch { reply.focus(); reply.select(); say("Selecione a resposta e use Copiar no menu do Android."); } });
 $("copy-reply").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(reply.value); say("Resposta copiada. Volte ao GPT-6 e cole."); }
   catch { reply.focus(); reply.select(); say("Selecione o texto e use Copiar no menu do Android."); }
