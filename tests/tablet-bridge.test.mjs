@@ -55,3 +55,12 @@ test("service worker is scoped to the PWA and caches the required shell", async 
     assert.ok(sw.includes(asset), "missing cached asset: " + asset);
   }
 });
+
+test("every DOM element referenced by the client exists in the HTML", async () => {
+  const html = await read("index.html");
+  const js = await read("app.js");
+  const ids = [...js.matchAll(/\\$\\("([^"]+)"\\)/g)].map(match => match[1]);
+  for (const id of ids) {
+    assert.match(html, new RegExp('id="' + id + '"'), "missing DOM element: " + id);
+  }
+});
