@@ -31,6 +31,8 @@ test("UI provides explicit mission, reply, copy and clear controls", async () =>
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(html, /Você mantém o controle/);
+  assert.equal(html.includes("Content-Security-Policy"), true);
+  assert.equal(html.includes("object-src"), true);
   assert.equal(html.split('maxlength="100000"').length - 1, 2);
 });
 
