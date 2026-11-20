@@ -27,3 +27,8 @@ self.addEventListener("fetch", event => {
     event.respondWith(caches.match(event.request).then(hit => hit || fetch(event.request)));
   }
 });
+self.addEventListener("message", event => {
+  if (event.data?.type === "CLEAR_INBOX") {
+    event.waitUntil(caches.open(CACHE).then(cache => cache.delete(INBOX)));
+  }
+});
