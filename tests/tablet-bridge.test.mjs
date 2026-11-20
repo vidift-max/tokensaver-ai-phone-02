@@ -43,7 +43,7 @@ test("client stores only local text and requires user-initiated sharing", async 
   assert.match(js, /navigator\.share\(\{title: label, text\}\)/);
   assert.match(js, /navigator\.clipboard\.writeText/);
   assert.match(js, /navigator\.clipboard\?\.readText/);
-  assert.match(js, /confirm\(/);
+  assert.match(js, /confirm\(/);\n  assert.match(js, /navigator\.serviceWorker\.ready/);
   assert.equal(js.includes("innerHTML"), false);
   assert.equal(js.includes("new Function"), false);
   assert.doesNotMatch(js, /fetch\(["']https?:\/\//);
