@@ -29,7 +29,7 @@ Servir esta pasta como conteúdo estático em HTTPS. O caminho de publicação d
 3. Digitar uma missão e tocar em **Compartilhar com ChatGPT**; confirmar que o Android abre a folha de compartilhamento.
 4. Selecionar a segunda sessão ChatGPT e enviar manualmente.
 5. Na resposta, usar Compartilhar e procurar **Ponte entre IAs**; se não aparecer, copiar a resposta e colar no campo.
-6. Tocar em **Devolver ao GPT-6** e escolher o navegador/sessão GPT-6.
+6. Tocar em **Copiar resposta para GPT-6**, voltar à conversa GPT-6 no navegador e colar.
 7. Confirmar que a limpeza remove os textos locais.
 
 Não considerar a integração funcional até executar os passos reais em um tablet Android.
