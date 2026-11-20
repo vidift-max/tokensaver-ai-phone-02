@@ -31,6 +31,7 @@ test("UI provides explicit mission, reply, copy and clear controls", async () =>
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(html, /Você mantém o controle/);
+  assert.equal(html.split('maxlength="100000"').length - 1, 2);
 });
 
 test("client stores only local text and requires user-initiated sharing", async () => {
@@ -40,6 +41,8 @@ test("client stores only local text and requires user-initiated sharing", async 
   assert.match(js, /navigator\.clipboard\.writeText/);
   assert.match(js, /navigator\.clipboard\?\.readText/);
   assert.match(js, /confirm\(/);
+  assert.equal(js.includes("innerHTML"), false);
+  assert.equal(js.includes("new Function"), false);
   assert.doesNotMatch(js, /fetch\(["']https?:\/\//);
 });
 
