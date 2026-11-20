@@ -9,7 +9,6 @@ setPill("mission-state", mission.value ? "Salva" : "Vazia");
 setPill("inbox-state", reply.value ? "Recebida" : "Aguardando");
 mission.addEventListener("input", () => { localStorage.setItem(KEY_MISSION, mission.value); setPill("mission-state", mission.value ? "Salva" : "Vazia"); });
 reply.addEventListener("input", () => { localStorage.setItem(KEY_REPLY, reply.value); setPill("inbox-state", reply.value ? "Recebida" : "Aguardando"); });
-$("save-mission").addEventListener("click", () => { localStorage.setItem(KEY_MISSION, mission.value); say("Missão salva somente neste dispositivo."); });
 
 async function pasteFromClipboard(target, label){
   try {
