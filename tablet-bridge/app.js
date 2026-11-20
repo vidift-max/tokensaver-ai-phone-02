@@ -48,9 +48,8 @@ async function receiveSharedText(){
   } catch { /* no pending shared item */ }
 }
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-  navigator.serviceWorker.register("./sw.js").then(() => receiveSharedText()).catch(() => say("Modo offline/compartilhamento não ativado neste endereço."));
+  navigator.serviceWorker.register("./sw.js").then(() => navigator.serviceWorker.ready).then(() => receiveSharedText()).catch(() => say("Modo offline/compartilhamento não ativado neste endereço."));
 }
-if (new URLSearchParams(location.search).has("shared")) receiveSharedText();
 let installPrompt;
 window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); installPrompt = event; $("install").hidden = false; });
 $("install").addEventListener("click", async () => { if (!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $("install").hidden = true; });
