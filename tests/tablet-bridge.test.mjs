@@ -43,7 +43,8 @@ test("client stores only local text and requires user-initiated sharing", async 
   assert.match(js, /navigator\.share\(\{title: label, text\}\)/);
   assert.match(js, /navigator\.clipboard\.writeText/);
   assert.match(js, /navigator\.clipboard\?\.readText/);
-  assert.match(js, /confirm\(/);\n  assert.match(js, /navigator\.serviceWorker\.ready/);
+  assert.match(js, /confirm\(/);
+  assert.match(js, /navigator\.serviceWorker\.ready/);
   assert.equal(js.includes("innerHTML"), false);
   assert.equal(js.includes("new Function"), false);
   assert.doesNotMatch(js, /fetch\(["']https?:\/\//);
@@ -59,7 +60,7 @@ test("service worker is scoped to the PWA and caches the required shell", async 
 test("every DOM element referenced by the client exists in the HTML", async () => {
   const html = await read("index.html");
   const js = await read("app.js");
-  const ids = [...js.matchAll(/\\$\\("([^"]+)"\\)/g)].map(match => match[1]);
+  const ids = [...js.matchAll(/\$\("([^"]+)"\)/g)].map(match => match[1]);
   for (const id of ids) {
     assert.match(html, new RegExp('id="' + id + '"'), "missing DOM element: " + id);
   }
