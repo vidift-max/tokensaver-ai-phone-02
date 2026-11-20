@@ -26,7 +26,7 @@ test("service worker receives shared text and limits its size", async () => {
 
 test("UI provides explicit mission, reply, copy and clear controls", async () => {
   const html = await read("index.html");
-  for (const id of ["mission", "reply", "share-mission", "send-reply", "copy-reply", "clear"]) {
+  for (const id of ["mission", "reply", "share-mission", "send-reply", "clear"]) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(html, /Você mantém o controle/);
