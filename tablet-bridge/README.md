@@ -26,10 +26,22 @@ Servir esta pasta como conteúdo estático em HTTPS. O caminho de publicação d
 
 1. Abrir o endereço HTTPS desta pasta no Chrome Android.
 2. Instalar pelo menu do navegador, se a opção estiver disponível.
-3. Digitar uma missão e tocar em **Compartilhar com ChatGPT**; confirmar que o Android abre a folha de compartilhamento.
-4. Selecionar a segunda sessão ChatGPT e enviar manualmente.
-5. Na resposta, usar Compartilhar e procurar **Ponte entre IAs**; se não aparecer, copiar a resposta e colar no campo.
+3. Na conversa GPT-6, copiar a missão; na Ponte, tocar em **Colar missão copiada**.
+4. Tocar em **Compartilhar com ChatGPT**, selecionar a segunda sessão e confirmar o envio.
+5. Na resposta da IA-2, tentar Compartilhar → **Ponte entre IAs**. Algumas versões do ChatGPT podem compartilhar um link da conversa, não o texto da resposta; nesse caso, copiar a resposta e usar **Colar resposta copiada** na Ponte.
 6. Tocar em **Copiar resposta para GPT-6**, voltar à conversa GPT-6 no navegador e colar.
-7. Confirmar que a limpeza remove os textos locais.
+7. Confirmar que a limpeza remove os textos locais e a mensagem pendente do service worker.
 
 Não considerar a integração funcional até executar os passos reais em um tablet Android.
+
+## Configuração de publicação no Render (não executada)
+
+Para disponibilizar a PWA em HTTPS, criar um serviço **Static Site** no workspace AI-PHONE-02 com:
+
+- Repository: `https://github.com/vidift-max/tokensaver-ai-phone-02`
+- Branch: `feature/tablet-chatgpt-bridge-pwa` (ou a branch aprovada após merge)
+- Build command: `echo "No build required"`
+- Publish directory: `tablet-bridge`
+- Auto-deploy: desativado até autorização explícita.
+
+O Render fornece HTTPS para o subdomínio do serviço. Serviço público e consumo de banda dependem das condições/limites do plano; revisar o painel antes de criar. A criação e o deploy não foram executados.
