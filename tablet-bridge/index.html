@@ -16,14 +16,14 @@
     <section class="card">
       <div class="section-head"><h2>1. Missão do GPT-6</h2><span id="mission-state" class="pill">Vazia</span></div>
       <label for="mission">Texto que será enviado à IA-2</label>
-      <textarea id="mission" rows="7" placeholder="Cole ou receba aqui a missão preparada pelo GPT-6."></textarea>
+      <textarea id="mission" maxlength="100000" rows="7" placeholder="Cole ou receba aqui a missão preparada pelo GPT-6."></textarea>
       <div class="actions"><button id="paste-mission" class="secondary">Colar missão copiada</button><button id="share-mission" class="primary">Compartilhar com ChatGPT</button></div>
     </section>
     <section class="card">
       <div class="section-head"><h2>2. Resposta da IA-2</h2><span id="inbox-state" class="pill">Aguardando</span></div>
       <p class="hint">No ChatGPT, use Compartilhar e escolha esta Ponte. Se o app não aparecer, copie a resposta e cole abaixo.</p>
       <label for="reply">Resposta recebida</label>
-      <textarea id="reply" rows="7" placeholder="A resposta compartilhada pela IA-2 aparecerá aqui."></textarea>
+      <textarea id="reply" maxlength="100000" rows="7" placeholder="A resposta compartilhada pela IA-2 aparecerá aqui."></textarea>
       <div class="actions"><button id="paste-reply" class="secondary">Colar resposta copiada</button><button id="send-reply" class="primary">Copiar resposta para GPT-6</button></div>
     </section>
     <section class="card compact">
