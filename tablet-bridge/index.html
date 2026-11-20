@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101827">
+  <meta name="description" content="Ponte local e assistida para transferir mensagens entre sessões ChatGPT no tablet.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+  <title>Ponte entre IAs</title>
+</head>
+<body>
+  <main class="shell">
+    <header><div class="mark">↔</div><div><h1>Ponte entre IAs</h1><p>Transferência assistida · somente neste dispositivo</p></div></header>
+    <section class="notice"><strong>Você mantém o controle.</strong> Nada é enviado sozinho. Confira o texto e toque em compartilhar para escolher o ChatGPT.</section>
+    <section class="card">
+      <div class="section-head"><h2>1. Missão do GPT-6</h2><span id="mission-state" class="pill">Vazia</span></div>
+      <label for="mission">Texto que será enviado à IA-2</label>
+      <textarea id="mission" rows="7" placeholder="Cole ou receba aqui a missão preparada pelo GPT-6."></textarea>
+      <div class="actions"><button id="share-mission" class="primary">Compartilhar com ChatGPT</button><button id="save-mission" class="secondary">Salvar missão</button></div>
+    </section>
+    <section class="card">
+      <div class="section-head"><h2>2. Resposta da IA-2</h2><span id="inbox-state" class="pill">Aguardando</span></div>
+      <p class="hint">No ChatGPT, use Compartilhar e escolha esta Ponte. Se o app não aparecer, copie a resposta e cole abaixo.</p>
+      <label for="reply">Resposta recebida</label>
+      <textarea id="reply" rows="7" placeholder="A resposta compartilhada pela IA-2 aparecerá aqui."></textarea>
+      <div class="actions"><button id="send-reply" class="primary">Devolver ao GPT-6</button><button id="copy-reply" class="secondary">Copiar resposta</button></div>
+    </section>
+    <section class="card compact">
+      <div class="section-head"><h2>Controle</h2><span class="pill safe">Local</span></div>
+      <p class="hint">Os textos ficam no armazenamento local deste navegador. Limpar a sessão apaga os dois campos deste dispositivo.</p>
+      <div class="actions"><button id="clear" class="danger">Limpar sessão</button><button id="install" class="secondary" hidden>Instalar no tablet</button></div>
+      <p id="status" role="status" aria-live="polite"></p>
+    </section>
+    <footer>Versão inicial · sem API, sem login, sem coleta e sem automação de tela.</footer>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
