@@ -16,6 +16,7 @@ Ponte local e assistida para transferir texto entre duas sessões ChatGPT aberta
 - Não envia mensagens automaticamente nem lê conversas privadas.
 - O usuário escolhe o app de destino e confirma cada compartilhamento.
 - O recebimento por Compartilhar depende do Android/Chrome oferecer esta PWA instalada como destino; se não aparecer, use copiar/colar.
+- Não cole senhas, tokens, chaves de API ou informações sigilosas: os textos ficam no armazenamento local do navegador.
 - Os dados locais podem ser apagados pelo usuário ao limpar os dados do navegador/PWA. O botão **Limpar sessão** apaga os dois campos da aplicação.
 
 ## Publicação
