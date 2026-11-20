@@ -45,6 +45,7 @@ jobs:
       - run: cargo check --manifest-path src-tauri/Cargo.toml
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm install
+      - run: npm run test:tablet-bridge
       - run: npm run test:missions
       - run: npm run test:phone-runtime
       - run: npm run test:phone-worker
@@ -94,6 +95,7 @@ jobs:
       - run: cargo check --manifest-path src-tauri/Cargo.toml
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm install
+      - run: npm run test:tablet-bridge
       - run: npm run test:missions
       - run: npm run test:phone-runtime
       - run: npm run test:phone-worker
