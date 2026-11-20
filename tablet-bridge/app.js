@@ -35,7 +35,9 @@ $("send-reply").addEventListener("click", async () => { try { await navigator.cl
 $("clear").addEventListener("click", () => {
   if (!confirm("Apagar a missão e a resposta salvas neste navegador?")) return;
   mission.value = ""; reply.value = ""; localStorage.removeItem(KEY_MISSION); localStorage.removeItem(KEY_REPLY);
-  setPill("mission-state","Vazia"); setPill("inbox-state","Aguardando"); say("Sessão local limpa.");
+  setPill("mission-state","Vazia"); setPill("inbox-state","Aguardando");
+  navigator.serviceWorker?.controller?.postMessage({type:"CLEAR_INBOX"});
+  say("Sessão local limpa.");
 });
 async function receiveSharedText(){
   try {
