@@ -26,7 +26,7 @@ test("service worker receives shared text and limits its size", async () => {
 
 test("UI provides explicit mission, reply, copy and clear controls", async () => {
   const html = await read("index.html");
-  for (const id of ["mission", "reply", "share-mission", "send-reply", "clear"]) {
+  for (const id of ["mission", "reply", "paste-mission", "paste-reply", "share-mission", "send-reply", "clear"]) {
     assert.match(html, new RegExp('id="' + id + '"'));
   }
   assert.match(html, /Você mantém o controle/);
@@ -37,6 +37,7 @@ test("client stores only local text and requires user-initiated sharing", async 
   assert.match(js, /localStorage\.setItem/);
   assert.match(js, /navigator\.share\(\{title: label, text\}\)/);
   assert.match(js, /navigator\.clipboard\.writeText/);
+  assert.match(js, /navigator\.clipboard\?\.readText/);
   assert.match(js, /confirm\(/);
   assert.doesNotMatch(js, /fetch\(["']https?:\/\//);
 });
