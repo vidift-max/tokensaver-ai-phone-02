@@ -22,6 +22,7 @@ test("service worker receives shared text and limits its size", async () => {
   assert.match(sw, /slice\(0, 100000\)/);
   assert.match(sw, /cache\.put\(INBOX/);
   assert.match(sw, /cache\.delete\(INBOX\)/);
+  assert.match(sw, /CLEAR_INBOX/);
 });
 
 test("UI provides explicit mission, reply, copy and clear controls", async () => {
